@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
 
-class AgentKind(str, Enum):
-    CLI = "cli"
+class AgentType(str, Enum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+    GEMINI = "gemini"
 
 
 class WorkingDirMode(Enum):
@@ -35,26 +37,38 @@ class Project:
     github: Optional[GitHubRepoConfig] = None
 
 
-@dataclass
-class Agent:
-    id: str
-    kind: AgentKind
-    command: List[str]
-    working_dir_mode: WorkingDirMode
-    fixed_path: Optional[Path] = None
-
-
 class SessionStatus(str, Enum):
     ACTIVE = "active"
     ENDED = "ended"
 
 
 @dataclass
+class Agent:
+    id: str
+    type: AgentType
+    command: List[str]
+    working_dir_mode: WorkingDirMode
+    fixed_path: Optional[Path] = None
+    env: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ConversationMessage:
+    role: str
+    content: str
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class Session:
     project_id: str
-    slack_channel: str
-    slack_thread_ts: str
+    channel_id: str
+    thread_ts: str
     active_agent_id: str
+    active_agent_type: AgentType
+    project_path: Path
+    conversation_history: List[ConversationMessage] = field(default_factory=list)
+    session_context: Dict[str, Any] = field(default_factory=dict)
     status: SessionStatus = SessionStatus.ACTIVE
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

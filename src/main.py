@@ -10,7 +10,6 @@ import signal
 from dotenv import load_dotenv
 
 from .core import Config, Router, SessionManager, load_config
-from .agents import ProcessManager
 from .chat_adapters.slack_adapter import SlackAdapter
 
 LOGGER = logging.getLogger(__name__)
@@ -32,12 +31,11 @@ async def _run_async() -> None:
     )
 
     session_manager = SessionManager()
-    process_manager = ProcessManager()
-    router = Router(session_manager, process_manager, config)
+    router = Router(session_manager, config)
     slack_adapter = SlackAdapter(
         bot_token=config.slack_bot_token,
         app_token=config.slack_app_token,
-        allowed_user_id=config.slack_allowed_user_id,
+        allowed_user_ids=config.slack_allowed_user_ids,
         router=router,
     )
     router.bind_adapter(slack_adapter)

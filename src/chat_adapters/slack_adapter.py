@@ -24,13 +24,13 @@ class SlackAdapter(IChatAdapter):
         self,
         bot_token: str,
         app_token: str,
-        allowed_user_id: str,
+        allowed_user_ids: list[str],
         router: Router,
     ) -> None:
         self._web_client = AsyncWebClient(token=bot_token)
         self._client = SocketModeClient(app_token=app_token, web_client=self._web_client)
         self._router = router
-        self._allowed_user_id = allowed_user_id
+        self._allowed_user_ids = allowed_user_ids
         self._stop_event = asyncio.Event()
         self._channel_name_cache: Dict[str, str] = {}
         self._client.socket_mode_request_listeners.append(self._handle_socket_request)
@@ -64,15 +64,18 @@ class SlackAdapter(IChatAdapter):
         event = payload.get("event", {})
         await client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
 
-        user_id = event.get("user")
-        if user_id != self._allowed_user_id:
-            LOGGER.debug("Ignoring message from unauthorized user %s", user_id)
-            return
-
         event_type = event.get("type")
         subtype = event.get("subtype")
-        if event_type != "message" or subtype == "bot_message":
-            LOGGER.debug("Ignoring Slack event type %s with subtype %s", event_type, subtype)
+        bot_id = event.get("bot_id")
+
+        # Ignore non-message events and bot messages
+        if event_type != "message" or subtype == "bot_message" or bot_id:
+            LOGGER.debug("Ignoring Slack event type %s with subtype %s, bot_id %s", event_type, subtype, bot_id)
+            return
+
+        user_id = event.get("user")
+        if user_id not in self._allowed_user_ids:
+            LOGGER.debug("Ignoring message from unauthorized user %s (allowed: %s)", user_id, self._allowed_user_ids)
             return
 
         await self._inject_channel_name(event)

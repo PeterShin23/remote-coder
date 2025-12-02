@@ -14,7 +14,7 @@ from .errors import (
 )
 from .models import (
     Agent,
-    AgentKind,
+    AgentType,
     CommandArg,
     CommandDefinition,
     GitHubRepoConfig,
@@ -31,7 +31,7 @@ __all__ = [
     "Config",
     "load_config",
     "Agent",
-    "AgentKind",
+    "AgentType",
     "CommandArg",
     "CommandDefinition",
     "GitHubRepoConfig",

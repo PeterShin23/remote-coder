@@ -11,10 +11,10 @@ projects:
   # Slack channel #project-1 → base_dir/project-1
   project-1:
     path: project-1
-    default_agent: claude-code
+    default_agent: claude
 
   # Slack channel #project-beta → base_dir/work/project-1
   # (can be nested in subdirectories)
-  project-1:
+  project-beta:
     path: work/project-1
-    default_agent: gemini-cli
+    default_agent: codex

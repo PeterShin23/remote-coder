@@ -11,13 +11,7 @@ from typing import Dict, Tuple
 import yaml
 
 from .errors import AgentNotFound, ConfigError, ProjectNotFound
-from .models import (
-    Agent,
-    AgentKind,
-    GitHubRepoConfig,
-    Project,
-    WorkingDirMode,
-)
+from .models import Agent, AgentType, GitHubRepoConfig, Project, WorkingDirMode
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,7 +22,7 @@ class Config:
     agents: Dict[str, Agent]
     slack_bot_token: str
     slack_app_token: str
-    slack_allowed_user_id: str
+    slack_allowed_user_ids: list[str]
     github_token: str | None = None
 
     def get_project_by_channel(self, channel: str) -> Project:
@@ -57,7 +51,8 @@ def load_config(base_dir: Path | None = None) -> Config:
 
     slack_bot_token = _require_env("SLACK_BOT_TOKEN")
     slack_app_token = _require_env("SLACK_APP_TOKEN")
-    slack_allowed_user_id = _require_env("SLACK_ALLOWED_USER_ID")
+    slack_allowed_user_id_str = _require_env("SLACK_ALLOWED_USER_ID")
+    slack_allowed_user_ids = [uid.strip() for uid in slack_allowed_user_id_str.split(",")]
     github_token = os.getenv("GITHUB_TOKEN")
 
     return Config(
@@ -65,7 +60,7 @@ def load_config(base_dir: Path | None = None) -> Config:
         agents=agents,
         slack_bot_token=slack_bot_token,
         slack_app_token=slack_app_token,
-        slack_allowed_user_id=slack_allowed_user_id,
+        slack_allowed_user_ids=slack_allowed_user_ids,
         github_token=github_token,
     )
 
@@ -120,12 +115,29 @@ def _load_agents(path: Path) -> Dict[str, Agent]:
     agents = {}
     for agent_id, cfg in data.get("agents", {}).items():
         working_mode, fixed_path = _parse_working_dir_mode(cfg.get("working_dir_mode"))
+        agent_type_raw = cfg.get("type")
+        if not agent_type_raw:
+            raise ConfigError(f"Agent {agent_id} is missing required type field")
+        try:
+            agent_type = AgentType(agent_type_raw.lower())
+        except ValueError as exc:
+            raise ConfigError(f"Unsupported agent type {agent_type_raw} for {agent_id}") from exc
+
+        command = cfg.get("command")
+        if not isinstance(command, list) or not command:
+            raise ConfigError(f"Agent {agent_id} must supply a non-empty command list")
+
+        env = cfg.get("env") or {}
+        if not isinstance(env, dict):
+            raise ConfigError(f"env for agent {agent_id} must be a mapping")
+
         agents[agent_id] = Agent(
             id=agent_id,
-            kind=AgentKind(cfg.get("kind", "cli")),
-            command=cfg["command"],
+            type=agent_type,
+            command=command,
             working_dir_mode=working_mode,
             fixed_path=fixed_path,
+            env={str(k): str(v) for k, v in env.items()},
         )
     return agents
 

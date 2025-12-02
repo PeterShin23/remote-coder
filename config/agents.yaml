@@ -1,18 +1,24 @@
-# Define which CLI agents are available
-# These must be installed and accessible in your PATH
+# Define which CLI agents are available. Each entry describes the adapter type
+# plus the command invocation that should be executed.
 
 agents:
-  codex-cli:
-    kind: cli
-    command: ["codex"]
-    working_dir_mode: project # Run in project directory
-
-  claude-code:
-    kind: cli
-    command: ["claude"]
+  claude:
+    type: claude
+    command:
+      - claude
+      - --print
+      - --permission-mode
+      - acceptEdits
+      - --output-format
+      - stream-json
+      - --verbose
     working_dir_mode: project
 
-  gemini-cli:
-    kind: cli
-    command: ["gemini"]
+  codex:
+    type: codex
+    command:
+      - codex
+      - exec
+      - --sandbox
+      - workspace-write
     working_dir_mode: project
