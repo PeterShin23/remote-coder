@@ -1,0 +1,20 @@
+# Base directory containing your git repositories
+base_dir: /home/user/code
+
+# Each project maps a Slack channel to a local git repository
+# Requirements:
+#   - The directory must be a git repository with a remote configured
+#   - The Slack channel name should match the directory name
+#   - GitHub info will be auto-detected from the git remote
+
+projects:
+  # Slack channel #project-1 → base_dir/project-1
+  project-1:
+    path: project-1
+    default_agent: claude-code
+
+  # Slack channel #project-beta → base_dir/work/project-1
+  # (can be nested in subdirectories)
+  project-1:
+    path: work/project-1
+    default_agent: gemini-cli

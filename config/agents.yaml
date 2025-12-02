@@ -1,0 +1,18 @@
+# Define which CLI agents are available
+# These must be installed and accessible in your PATH
+
+agents:
+  codex-cli:
+    kind: cli
+    command: ["codex-cli"]
+    working_dir_mode: project  # Run in project directory
+
+  claude-code:
+    kind: cli
+    command: ["claude-code"]
+    working_dir_mode: project
+
+  gemini-cli:
+    kind: cli
+    command: ["gemini-cli"]
+    working_dir_mode: project
