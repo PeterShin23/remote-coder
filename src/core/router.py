@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -19,6 +20,7 @@ from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
 from .models import Agent, AgentType, Project, Session, SessionStatus
 from .session_manager import SessionManager
 
+PR_TITLE_PATTERN = re.compile(r"(?im)^PR\s*Title:\s*(.+)$")
 LOGGER = logging.getLogger(__name__)
 
 CODE_TASK_WRAPPER = """You are Remote Coder, an autonomous developer working inside the user's repository.
@@ -28,6 +30,11 @@ CODE_TASK_WRAPPER = """You are Remote Coder, an autonomous developer working ins
 3. Summarize the changes you made in a concise, user-friendly way. Mention any follow-up work or tests the user should run.
 4. If no code changes are required, explain why and offer guidance instead of editing files.
 5. Never fabricate results or skip steps—only describe what you actually verified or changed.
+6. End every response with:
+   PR Title: <short phrase describing the major change (few words)>
+   Summary:
+   - <few words for the first major change>
+   - <few words for the next major change (omit minor tweaks)>
 """
 
 
@@ -178,6 +185,10 @@ class Router:
                 f"Failed to run `{agent.id}`: {exc}",
             )
             return
+
+        pr_title = self._extract_pr_title(result.output_text or "")
+        if pr_title:
+            self._session_manager.update_session_context(session.id, {"pr_title": pr_title})
 
         response_text = result.output_text or "Agent completed with no textual output."
         if result.errors:
@@ -412,8 +423,9 @@ class Router:
         await self._run_git(session.project_path, ["push", "-u", "origin", branch])
 
         existing_pr_number = self._get_existing_pr_number(session.id)
+        pr_title = self._get_session_pr_title(session)
         options = EnsurePROptions(
-            title=f"Remote Coder updates for session {session.id}",
+            title=pr_title,
             body=(
                 f"Automated changes requested via Slack thread {session.thread_ts} "
                 f"in channel {session.channel_id}."
@@ -451,7 +463,7 @@ class Router:
         await self._run_git(repo_path, ["checkout", "-B", branch, base])
 
     async def _commit_changes(self, repo_path: Path, session: Session) -> bool:
-        message = f"Remote Coder update for session {session.id}"
+        message = self._get_session_pr_title(session)
         try:
             await self._run_git(repo_path, ["commit", "-m", message])
             return True
@@ -511,6 +523,23 @@ class Router:
             "Focus on implementing the requested changes, keeping git history clean, and summarizing what you fixed."
         )
         return "\n".join(lines)
+
+    def _extract_pr_title(self, text: str) -> Optional[str]:
+        match = PR_TITLE_PATTERN.search(text)
+        if not match:
+            return None
+        title = match.group(1).strip()
+        if not title:
+            return None
+        if len(title) > 120:
+            title = title[:117].rstrip() + "..."
+        return title.rstrip(".")
+
+    def _get_session_pr_title(self, session: Session) -> str:
+        context_title = session.session_context.get("pr_title")
+        if isinstance(context_title, str) and context_title.strip():
+            return context_title.strip()
+        return f"Remote Coder updates for session {session.id}"
 
     def _get_adapter(self, agent: Agent) -> AgentAdapter:
         cached = self._adapter_cache.get(agent.id)
