@@ -105,6 +105,7 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
      - `!status` / `@remote-coder status` – display the active agent and message history count.
      - `!review` / `@remote-coder review pr` – list unresolved GitHub review comments for the session’s pull request (requires GitHub token + project metadata).
      - `!end` / `@remote-coder end` – end the current session (start a new Slack thread to reset state).
+     - `!help` / `@remote-coder help` – show the available commands.
    - **Automatic PR workflow**:
      - When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch.
      - A link to the PR is posted in the Slack thread after every successful push so you can review progress immediately.
@@ -121,4 +122,4 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 
 Implementation follows `plans/1-implementation.md`. Passes 1–2 (Python skeleton and Slack adapter) are in place; upcoming work focuses on agent process management, command handling, GitHub integration, and polishing for production use.
 
-<!-- I was here -->
+i am here

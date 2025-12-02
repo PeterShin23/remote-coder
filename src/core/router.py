@@ -122,7 +122,21 @@ class Router:
                 f"Starting session for `{project.id}` with `{session.active_agent_id}`. "
                 "Send a message with your request.",
             )
-            await self._setup_session_branch(session, project)
+            try:
+                await self._setup_session_branch(session, project)
+            except GitHubError as exc:
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed to prepare session branch: {exc}",
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = (exc.stderr or exc.stdout or str(exc)).strip()
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed to prepare session branch: {detail or 'git error'}",
+                )
             return
 
         agent = self._config.get_agent(session.active_agent_id)
@@ -185,7 +199,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end", "review"}:
+        if name in {"use", "status", "end", "review", "help", "commands"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -205,6 +219,8 @@ class Router:
             await self._command_status(session, channel_id, thread_ts)
         elif command.name == "review":
             await self._command_review(session, project, channel_id, thread_ts)
+        elif command.name in {"help", "commands"}:
+            await self._command_help(channel_id, thread_ts)
         else:
             await self._send_message(channel_id, thread_ts, f"Unknown command `{command.name}`")
 
@@ -246,6 +262,19 @@ class Router:
             f"Status: {session.status.value}",
         ]
         await self._send_message(channel, thread_ts, "\n".join(status_lines))
+
+    async def _command_help(self, channel: str, thread_ts: str) -> None:
+        lines = [
+            "Available commands:",
+            "- `!use <agent>` / `!switch <agent>` – Switch to another configured agent.",
+            "- `!status` – Show session, active agent, and history count.",
+            "- `!review` – List unresolved GitHub review comments for this session's PR.",
+            "- `!end` – End the session (start a new Slack thread to reset).",
+            "- `!help` – Show this command list.",
+            "",
+            "Send any other message to run the current agent once with that request.",
+        ]
+        await self._send_message(channel, thread_ts, "\n".join(lines))
 
     async def _command_review(
         self,
@@ -359,9 +388,7 @@ class Router:
 
         base = project.github.default_base_branch
         await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", base])
-        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
-        await self._run_git(repo_path, ["checkout", "-B", branch])
+        await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
 
     async def _publish_branch_update(self, session: Session, project: Project) -> Optional[str]:
         branch = f"remote-coder-{session.id}"
@@ -408,8 +435,6 @@ class Router:
             return
 
         await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", base])
-        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
         await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
 
     async def _commit_changes(self, repo_path: Path, session: Session) -> bool:

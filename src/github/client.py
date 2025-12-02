@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 
 from github import Github
@@ -121,29 +121,36 @@ class GitHubManager:
             raise GitHubError(f"Pull request #{pull.number} is closed.")
 
         comments: List[PRComment] = []
-        threads = pull.get_review_threads()
-        for thread in threads:
-            if self._thread_resolved(thread):
-                continue
-            for comment in getattr(thread, "comments", []):
-                path = getattr(comment, "path", None)
-                position = None
-                start_line = getattr(comment, "start_line", None)
-                line = getattr(comment, "line", None)
-                if start_line and line:
-                    position = f"{start_line}-{line}"
-                elif line:
-                    position = str(line)
-                comments.append(
-                    PRComment(
-                        author=getattr(comment.user, "login", "unknown"),
-                        body=comment.body or "",
-                        url=comment.html_url,
-                        path=path,
-                        position=position,
-                    )
-                )
+        if hasattr(pull, "get_review_threads"):
+            threads = pull.get_review_threads()
+            for thread in threads:
+                if self._thread_resolved(thread):
+                    continue
+                for comment in getattr(thread, "comments", []):
+                    comments.append(self._to_pr_comment(comment))
+            return comments
+
+        # Fallback for PyGithub versions without review thread support: include all review comments.
+        for comment in pull.get_review_comments():
+            comments.append(self._to_pr_comment(comment))
         return comments
+
+    def _to_pr_comment(self, comment: Any) -> PRComment:
+        path = getattr(comment, "path", None)
+        position = None
+        start_line = getattr(comment, "start_line", None)
+        line = getattr(comment, "line", None)
+        if start_line and line:
+            position = f"{start_line}-{line}"
+        elif line:
+            position = str(line)
+        return PRComment(
+            author=getattr(comment.user, "login", "unknown"),
+            body=comment.body or "",
+            url=getattr(comment, "html_url", ""),
+            path=path,
+            position=position,
+        )
 
     def _get_pull(self, project: Project, pull_number: int) -> PullRequest:
         if not self._client:
