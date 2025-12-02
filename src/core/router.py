@@ -120,7 +120,7 @@ class Router:
                 channel_id,
                 thread_ts,
                 f"Starting session for `{project.id}` with `{session.active_agent_id}`. "
-                "Send a message with your request.",
+                "Send a message with your request, or use `!help` for common commands.",
             )
             try:
                 await self._setup_session_branch(session, project)
@@ -221,7 +221,7 @@ class Router:
         channel_id: str,
         thread_ts: str,
     ) -> None:
-        if command.name in {"switch", "use"}:
+        if command.name == "use":
             await self._command_switch_agent(command, session, channel_id, thread_ts)
         elif command.name == "end":
             await self._command_end_session(session, channel_id, thread_ts)
@@ -276,7 +276,7 @@ class Router:
     async def _command_help(self, channel: str, thread_ts: str) -> None:
         lines = [
             "Available commands:",
-            "- `!use <agent>` / `!switch <agent>` – Switch to another configured agent.",
+            "- `!use <agent>` – Use configured coding agent. `claude` | `codex`",
             "- `!status` – Show session, active agent, and history count.",
             "- `!review` – List unresolved GitHub review comments for this session's PR.",
             "- `!end` – End the session (start a new Slack thread to reset).",
