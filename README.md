@@ -1,4 +1,4 @@
-# Remote Coder (Python)
+# Remote Coder
 
 Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your machine, using the official Slack SDK (Socket Mode) and PyGithub.
 
