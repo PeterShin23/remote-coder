@@ -73,7 +73,7 @@ class Router:
 
         command = parse_command(text) or self._parse_bot_command(text)
         if command:
-            await self._handle_command(command, session, channel_id, thread_ts)
+            await self._handle_command(command, session, project, channel_id, thread_ts)
             return
 
         if not text:
@@ -185,7 +185,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end"}:
+        if name in {"use", "status", "end", "review"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -193,6 +193,7 @@ class Router:
         self,
         command: ParsedCommand,
         session: Session,
+        project: Project,
         channel_id: str,
         thread_ts: str,
     ) -> None:
@@ -202,6 +203,8 @@ class Router:
             await self._command_end_session(session, channel_id, thread_ts)
         elif command.name == "status":
             await self._command_status(session, channel_id, thread_ts)
+        elif command.name == "review":
+            await self._command_review(session, project, channel_id, thread_ts)
         else:
             await self._send_message(channel_id, thread_ts, f"Unknown command `{command.name}`")
 
@@ -243,6 +246,52 @@ class Router:
             f"Status: {session.status.value}",
         ]
         await self._send_message(channel, thread_ts, "\n".join(status_lines))
+
+    async def _command_review(
+        self,
+        session: Session,
+        project: Project,
+        channel: str,
+        thread_ts: str,
+    ) -> None:
+        if not project.github:
+            await self._send_message(channel, thread_ts, "This project has no GitHub configuration.")
+            return
+        if not self._github_manager.is_configured():
+            await self._send_message(channel, thread_ts, "GitHub token is not configured; cannot fetch PR comments.")
+            return
+
+        try:
+            pr_ref = self._session_manager.get_pr_ref(session.id)
+        except SessionNotFound:
+            await self._send_message(channel, thread_ts, "No pull request exists yet for this session.")
+            return
+
+        try:
+            comments = await self._github_manager.get_unresolved_comments(project, pr_ref.number)
+        except GitHubError as exc:
+            await self._send_message(channel, thread_ts, f"Unable to fetch PR comments: {exc}")
+            return
+
+        if not comments:
+            await self._send_message(channel, thread_ts, f"No unresolved review threads on {pr_ref.url}")
+            return
+
+        lines = [f"Unresolved review comments for {pr_ref.url}:"]
+        for comment in comments[:10]:
+            location = ""
+            if comment.path:
+                location = f" `{comment.path}`"
+                if comment.position:
+                    location += f" (line {comment.position})"
+            snippet = comment.body.strip().replace("\n", " ")
+            if len(snippet) > 300:
+                snippet = snippet[:297] + "..."
+            lines.append(f"- {comment.author}{location}: {snippet}\n  {comment.url}")
+
+        if len(comments) > 10:
+            lines.append(f"...and {len(comments) - 10} more comments.")
+        await self._send_message(channel, thread_ts, "\n".join(lines))
 
     def _build_task_text(self, history: Sequence, user_text: str) -> str:
         recent = history[-5:]
