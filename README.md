@@ -117,3 +117,5 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 - Slack App Management: <https://api.slack.com/apps>
 - PyGithub: <https://pygithub.readthedocs.io/>
 - uv Tooling: <https://docs.astral.sh/uv/>
+
+I was here
