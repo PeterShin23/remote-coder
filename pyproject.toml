@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "remote-coder"
+version = "0.1.0"
+description = "Python daemon for controlling local coding agents via Slack."
+authors = [{ name = "Remote Coder" }]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "slack_sdk>=3.30.0",
+    "PyGithub>=2.4.0",
+    "PyYAML>=6.0.1",
+    "python-dotenv>=1.0.1",
+    "aiohttp>=3.10.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+remote-coder = "src.main:run"
