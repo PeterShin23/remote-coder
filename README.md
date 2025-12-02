@@ -119,3 +119,5 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 ## Roadmap
 
 Implementation follows `plans/1-implementation.md`. Passes 1–2 (Python skeleton and Slack adapter) are in place; upcoming work focuses on agent process management, command handling, GitHub integration, and polishing for production use.
+
+<!-- testing github pr -->
