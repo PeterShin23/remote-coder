@@ -1,6 +1,6 @@
-# Cockpit Coder (Python)
+# Remote Coder (Python)
 
-Cockpit Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your machine, using the official Slack SDK (Socket Mode) and PyGithub.
+Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your machine, using the official Slack SDK (Socket Mode) and PyGithub.
 
 ## Getting Started
 
@@ -8,8 +8,8 @@ Cockpit Coder is a Slack-first daemon that lets you control local coding agents,
 
 1. **Clone & enter the repo**
    ```bash
-   git clone https://github.com/PeterShin23/cockpit-coder.git
-   cd cockpit-coder
+   git clone https://github.com/PeterShin23/remote-coder.git
+   cd remote-coder
    ```
 
 2. **Copy env + config templates**
@@ -48,6 +48,10 @@ Cockpit Coder is a Slack-first daemon that lets you control local coding agents,
 5. **Install dependencies with uv**
    ```bash
    uv pip install -e .
+   ```
+   Note: May ask to create virtual environment first
+   ```bash
+   uv venv
    ```
 
 6. **Configure your projects**
