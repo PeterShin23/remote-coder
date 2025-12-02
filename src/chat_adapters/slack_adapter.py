@@ -68,8 +68,10 @@ class SlackAdapter(IChatAdapter):
             LOGGER.debug("Ignoring message from unauthorized user %s", user_id)
             return
 
-        if event.get("type") != "message":
-            LOGGER.debug("Ignoring Slack event type %s", event.get("type"))
+        event_type = event.get("type")
+        subtype = event.get("subtype")
+        if event_type != "message" or subtype == "bot_message":
+            LOGGER.debug("Ignoring Slack event type %s with subtype %s", event_type, subtype)
             return
 
         await self._router.handle_message(event)

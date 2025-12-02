@@ -34,8 +34,12 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
       }
    }
    ```
-   - Add scopes your bot needs (e.g., `app_mentions:read`, `channels:history`, `chat:write`).
-   - Install the app to your workspace and copy:
+   - Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions).
+   - Under **Event Subscriptions**, turn it on, choose Socket Mode delivery, and subscribe to:
+     - `app_mention` (always required so mentions work).
+     - `message.channels` if you want to react to all channel traffic.
+     - Reinstall the app after adding scopes/events so Slack issues a token that matches the new permissions.
+   - Install (or reinstall) the app to your workspace and copy:
      - **Bot User OAuth Token** (`SLACK_BOT_TOKEN`, looks like `xoxb-...`)
      - **App-Level Token** (`SLACK_APP_TOKEN`, looks like `xapp-1-...`)
    - Set `SLACK_ALLOWED_USER_ID` to your Slack user ID (find it in your Slack profile menu).

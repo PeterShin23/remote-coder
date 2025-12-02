@@ -19,7 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 async def _run_async() -> None:
     load_dotenv()
-    log_level = getattr(logging, os.getenv("COCKPIT_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
