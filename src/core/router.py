@@ -4,17 +4,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
+from uuid import UUID
 
-from ..agent_adapters import AgentAdapter, ClaudeAdapter, CodexAdapter
+from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter
 from ..chat_adapters.i_chat_adapter import IChatAdapter
+from ..github import GitHubManager
+from ..github.client import EnsurePROptions
 from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
 from .config import Config
-from .errors import AgentNotFound, ProjectNotFound, SessionNotFound
+from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
 from .models import Agent, AgentType, Project, Session, SessionStatus
 from .session_manager import SessionManager
 
 LOGGER = logging.getLogger(__name__)
+
+CODE_TASK_WRAPPER = """You are Remote Coder, an autonomous developer working inside the user's repository.
+
+1. Carefully read the latest Slack request and decide whether it requires code changes.
+2. If it does, plan the steps, edit the files directly, and ensure the work is ready for a pull request (run relevant tests/linters when needed).
+3. Summarize the changes you made in a concise, user-friendly way. Mention any follow-up work or tests the user should run.
+4. If no code changes are required, explain why and offer guidance instead of editing files.
+5. Never fabricate results or skip steps—only describe what you actually verified or changed.
+"""
 
 
 class Router:
@@ -24,9 +39,11 @@ class Router:
         self,
         session_manager: SessionManager,
         config: Config,
+        github_manager: GitHubManager,
     ) -> None:
         self._session_manager = session_manager
         self._config = config
+        self._github_manager = github_manager
         self._chat_adapter: Optional[IChatAdapter] = None
         self._adapter_cache: Dict[str, AgentAdapter] = {}
         self._session_locks: Dict[str, asyncio.Lock] = {}
@@ -105,9 +122,17 @@ class Router:
                 f"Starting session for `{project.id}` with `{session.active_agent_id}`. "
                 "Send a message with your request.",
             )
+            await self._setup_session_branch(session, project)
+            return
 
         agent = self._config.get_agent(session.active_agent_id)
         adapter = self._get_adapter(agent)
+
+        await self._send_message(
+            channel_id,
+            thread_ts,
+            f"Message received — running `{agent.id}` now.",
+        )
 
         history_snapshot = self._session_manager.get_conversation_history(session.id)
         adapter_history = self._format_history_for_adapter(history_snapshot)
@@ -140,6 +165,10 @@ class Router:
 
         self._session_manager.append_agent_message(session.id, response_text)
         self._session_manager.update_session_context(session.id, result.session_context)
+
+        pr_message = await self._maybe_publish_code_changes(session, project, result)
+        if pr_message:
+            response_text = f"{response_text}\n\n{pr_message}"
 
         await self._send_message(channel_id, thread_ts, response_text)
 
@@ -216,15 +245,19 @@ class Router:
         await self._send_message(channel, thread_ts, "\n".join(status_lines))
 
     def _build_task_text(self, history: Sequence, user_text: str) -> str:
-        if not history:
-            return user_text
         recent = history[-5:]
-        formatted = "\n".join(
+        history_lines = [
             f"{'User' if msg.role == 'user' else 'Assistant'}: {msg.content}".strip()
             for msg in recent
             if msg.content
+        ]
+        context_block = "\n".join(history_lines) if history_lines else "No prior conversation."
+        return (
+            f"{CODE_TASK_WRAPPER}\n\n"
+            f"Recent Slack context:\n{context_block}\n\n"
+            f"Current user request:\n{user_text}\n"
+            "Provide your answer below. If you changed code, summarize the edits and tests you ran."
         )
-        return f"Recent context:\n{formatted}\n\nCurrent request:\n{user_text}"
 
     def _format_history_for_adapter(self, history: Sequence) -> list[Dict[str, str]]:
         formatted: list[Dict[str, str]] = []
@@ -237,6 +270,128 @@ class Router:
                 }
             )
         return formatted
+
+    async def _maybe_publish_code_changes(
+        self,
+        session: Session,
+        project: Project,
+        result: AgentResult,
+    ) -> Optional[str]:
+        if not project.github or not self._github_manager.is_configured():
+            return None
+
+        repo_path = session.project_path
+        has_changes = bool(result.file_edits)
+        if not has_changes:
+            has_changes = await self._repo_has_changes(repo_path)
+        if not has_changes:
+            return None
+
+        try:
+            return await self._publish_branch_update(session, project)
+        except GitHubError as exc:
+            LOGGER.exception("GitHub workflow failed for session %s", session.id)
+            return f"GitHub integration failed: {exc}"
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or str(exc)).strip()
+            LOGGER.exception("Git command failed for session %s", session.id)
+            message = detail or "Unknown git error."
+            return f"Git command failed while preparing PR: {message}"
+
+    async def _setup_session_branch(self, session: Session, project: Project) -> None:
+        if not project.github:
+            return
+        branch = f"remote-coder-{session.id}"
+        repo_path = session.project_path
+        rev_parse = await self._run_git(repo_path, ["rev-parse", "--verify", branch], check=False)
+        if rev_parse.returncode == 0:
+            await self._run_git(repo_path, ["checkout", branch])
+            return
+
+        base = project.github.default_base_branch
+        await self._run_git(repo_path, ["fetch", "origin", base])
+        await self._run_git(repo_path, ["checkout", base])
+        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
+        await self._run_git(repo_path, ["checkout", "-B", branch])
+
+    async def _publish_branch_update(self, session: Session, project: Project) -> Optional[str]:
+        branch = f"remote-coder-{session.id}"
+        await self._ensure_branch(session.project_path, project, branch)
+        await self._run_git(session.project_path, ["add", "-A"])
+        if not await self._commit_changes(session.project_path, session):
+            return None
+        await self._run_git(session.project_path, ["push", "-u", "origin", branch])
+
+        existing_pr_number = self._get_existing_pr_number(session.id)
+        options = EnsurePROptions(
+            title=f"Remote Coder updates for session {session.id}",
+            body=(
+                f"Automated changes requested via Slack thread {session.thread_ts} "
+                f"in channel {session.channel_id}."
+            ),
+        )
+        pr_ref = await self._github_manager.ensure_pull_request(
+            project=project,
+            session_id=session.id,
+            branch=branch,
+            options=options,
+            existing_number=existing_pr_number,
+        )
+        self._session_manager.set_pr_ref(pr_ref)
+        return f"Pushed updates to branch `{branch}` and linked PR: {pr_ref.url}"
+
+    async def _repo_has_changes(self, repo_path: Path) -> bool:
+        result = await self._run_git(repo_path, ["status", "--porcelain"])
+        return bool(result.stdout.strip())
+
+    async def _ensure_branch(self, repo_path: Path, project: Project, branch: str) -> None:
+        # Check if branch exists locally
+        rev_parse = await self._run_git(repo_path, ["rev-parse", "--verify", branch], check=False)
+        if rev_parse.returncode == 0:
+            await self._run_git(repo_path, ["checkout", branch])
+            return
+
+        base = project.github.default_base_branch if project.github else "main"
+        dirty = await self._repo_has_changes(repo_path)
+        if dirty:
+            # Create the branch from the current HEAD (which already has the desired changes).
+            await self._run_git(repo_path, ["checkout", "-b", branch])
+            return
+
+        await self._run_git(repo_path, ["fetch", "origin", base])
+        await self._run_git(repo_path, ["checkout", base])
+        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
+        await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
+
+    async def _commit_changes(self, repo_path: Path, session: Session) -> bool:
+        message = f"Remote Coder update for session {session.id}"
+        try:
+            await self._run_git(repo_path, ["commit", "-m", message])
+            return True
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").lower()
+            if "nothing to commit" in stderr:
+                return False
+            raise
+
+    def _get_existing_pr_number(self, session_id: UUID) -> Optional[int]:
+        try:
+            pr_ref = self._session_manager.get_pr_ref(session_id)
+            return pr_ref.number
+        except SessionNotFound:
+            return None
+
+    async def _run_git(self, cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+        def _execute() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                check=check,
+            )
+
+        return await asyncio.to_thread(_execute)
 
     def _get_adapter(self, agent: Agent) -> AgentAdapter:
         cached = self._adapter_cache.get(agent.id)

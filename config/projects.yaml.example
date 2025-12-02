@@ -12,9 +12,17 @@ projects:
   project-1:
     path: project-1
     default_agent: claude
+    github:
+      owner: your-github-handle
+      repo: project-1
+      default_base_branch: main
 
-  # Slack channel #project-beta → base_dir/work/project-1
+  # Slack channel #project-2 → base_dir/work/project-2
   # (can be nested in subdirectories)
-  project-beta:
-    path: work/project-1
+  project-2:
+    path: work/project-2
     default_agent: codex
+    github:
+      owner: your-github-handle
+      repo: project-2
+      default_base_branch: main

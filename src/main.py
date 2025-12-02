@@ -10,6 +10,7 @@ import signal
 from dotenv import load_dotenv
 
 from .core import Config, Router, SessionManager, load_config
+from .github import GitHubManager
 from .chat_adapters.slack_adapter import SlackAdapter
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +32,8 @@ async def _run_async() -> None:
     )
 
     session_manager = SessionManager()
-    router = Router(session_manager, config)
+    github_manager = GitHubManager(config.github_token)
+    router = Router(session_manager, config, github_manager)
     slack_adapter = SlackAdapter(
         bot_token=config.slack_bot_token,
         app_token=config.slack_app_token,

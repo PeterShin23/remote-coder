@@ -51,8 +51,12 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 
 4. **Create a GitHub token (optional for PR features)**
 
-   - Generate a PAT with `repo` + `pull_request` scopes at [github.com/settings/tokens](https://github.com/settings/tokens).
-   - Add it to `.env` as `GITHUB_TOKEN=ghp_...`.
+   - Future phases will let the bot open/refresh pull requests and sync comments. Those calls require a GitHub token with access to the repositories you map in `config/projects.yaml`.
+   - Head to [github.com/settings/tokens](https://github.com/settings/tokens) and create either:
+     - A **fine-grained** token scoped to the specific org/repo with `Contents: Read/Write` and `Pull requests: Read/Write`, or
+     - A **classic** token with the `repo` scope (which already includes PR permissions).
+   - Copy the token value into `.env` as `GITHUB_TOKEN=ghp_...`.
+   - Keep the token local. Remote Coder only uses it when a workflow explicitly needs GitHub API access (e.g., syncing edits to a PR).
 
 5. **Install dependencies with uv**
 
@@ -69,6 +73,16 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 6. **Configure your projects**
 
    - Edit `config/projects.yaml` to map Slack channels to local paths/agents (the `default_agent` must match one of your agents).
+     ```yaml
+     projects:
+       remote-coder:
+         path: remote-coder
+         default_agent: codex
+         github:
+           owner: your-github-handle
+           repo: remote-coder
+           default_base_branch: main
+     ```
    - Edit `config/agents.yaml` to list the one-shot agent commands. Each entry looks like:
      ```yaml
      agents:
@@ -87,9 +101,13 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
    ```
    You should see log lines confirming the Slack Socket Mode connection. Mention or DM the bot (from the allowed user) to verify you see logging output.
    - Built-in Slack thread commands (either `!command` or `@remote-coder command`):
-     - `!switch <agent-id>` / `@remote-coder use <agent-id>` – switch the current session to another configured agent.
+     - `!use <agent-id>` / `!switch <agent-id>` / `@remote-coder use <agent-id>` – switch the current session to another configured agent.
      - `!status` / `@remote-coder status` – display the active agent and message history count.
      - `!end` / `@remote-coder end` – end the current session (start a new Slack thread to reset state).
+   - **Automatic PR workflow**:
+     - When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch.
+     - A link to the PR is posted in the Slack thread after every successful push so you can review progress immediately.
+     - Make sure each project in `config/projects.yaml` points to a git repository with a clean working tree and a reachable `origin` remote, and that `config/projects.yaml` includes the repository’s GitHub metadata (`owner`, `repo`, and `default_base_branch`).
 
 ## Useful Links
 
