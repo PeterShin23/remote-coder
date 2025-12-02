@@ -13,7 +13,7 @@ from uuid import UUID
 from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter
 from ..chat_adapters.i_chat_adapter import IChatAdapter
 from ..github import GitHubManager
-from ..github.client import EnsurePROptions
+from ..github.client import EnsurePROptions, PRComment
 from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
 from .config import Config
 from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
@@ -73,7 +73,7 @@ class Router:
 
         command = parse_command(text) or self._parse_bot_command(text)
         if command:
-            await self._handle_command(command, session, channel_id, thread_ts)
+            await self._handle_command(command, session, project, channel_id, thread_ts)
             return
 
         if not text:
@@ -114,7 +114,7 @@ class Router:
         thread_ts: str,
         user_text: str,
         session_created: bool,
-    ) -> None:
+        ) -> None:
         if session_created:
             await self._send_message(
                 channel_id,
@@ -122,9 +122,33 @@ class Router:
                 f"Starting session for `{project.id}` with `{session.active_agent_id}`. "
                 "Send a message with your request.",
             )
-            await self._setup_session_branch(session, project)
+            try:
+                await self._setup_session_branch(session, project)
+            except GitHubError as exc:
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed to prepare session branch: {exc}",
+                )
+            except subprocess.CalledProcessError as exc:
+                detail = (exc.stderr or exc.stdout or str(exc)).strip()
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed to prepare session branch: {detail or 'git error'}",
+                )
             return
 
+        await self._execute_agent_task(session, project, channel_id, thread_ts, user_text)
+
+    async def _execute_agent_task(
+        self,
+        session: Session,
+        project: Project,
+        channel_id: str,
+        thread_ts: str,
+        user_text: str,
+    ) -> None:
         agent = self._config.get_agent(session.active_agent_id)
         adapter = self._get_adapter(agent)
 
@@ -185,7 +209,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end"}:
+        if name in {"use", "status", "end", "review", "help", "commands"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -193,6 +217,7 @@ class Router:
         self,
         command: ParsedCommand,
         session: Session,
+        project: Project,
         channel_id: str,
         thread_ts: str,
     ) -> None:
@@ -202,6 +227,10 @@ class Router:
             await self._command_end_session(session, channel_id, thread_ts)
         elif command.name == "status":
             await self._command_status(session, channel_id, thread_ts)
+        elif command.name == "review":
+            await self._command_review(session, project, channel_id, thread_ts)
+        elif command.name in {"help", "commands"}:
+            await self._command_help(channel_id, thread_ts)
         else:
             await self._send_message(channel_id, thread_ts, f"Unknown command `{command.name}`")
 
@@ -243,6 +272,69 @@ class Router:
             f"Status: {session.status.value}",
         ]
         await self._send_message(channel, thread_ts, "\n".join(status_lines))
+
+    async def _command_help(self, channel: str, thread_ts: str) -> None:
+        lines = [
+            "Available commands:",
+            "- `!use <agent>` / `!switch <agent>` – Switch to another configured agent.",
+            "- `!status` – Show session, active agent, and history count.",
+            "- `!review` – List unresolved GitHub review comments for this session's PR.",
+            "- `!end` – End the session (start a new Slack thread to reset).",
+            "- `!help` – Show this command list.",
+            "",
+            "Send any other message to run the current agent once with that request.",
+        ]
+        await self._send_message(channel, thread_ts, "\n".join(lines))
+
+    async def _command_review(
+        self,
+        session: Session,
+        project: Project,
+        channel: str,
+        thread_ts: str,
+    ) -> None:
+        if not project.github:
+            await self._send_message(channel, thread_ts, "This project has no GitHub configuration.")
+            return
+        if not self._github_manager.is_configured():
+            await self._send_message(channel, thread_ts, "GitHub token is not configured; cannot fetch PR comments.")
+            return
+
+        try:
+            pr_ref = self._session_manager.get_pr_ref(session.id)
+        except SessionNotFound:
+            await self._send_message(channel, thread_ts, "No pull request exists yet for this session.")
+            return
+
+        try:
+            comments = await self._github_manager.get_unresolved_comments(project, pr_ref.number)
+        except GitHubError as exc:
+            await self._send_message(channel, thread_ts, f"Unable to fetch PR comments: {exc}")
+            return
+
+        if not comments:
+            await self._send_message(channel, thread_ts, f"No unresolved review threads on {pr_ref.url}")
+            return
+
+        lines = [f"Unresolved review comments for {pr_ref.url}:"]
+        for comment in comments[:10]:
+            location = ""
+            if comment.path:
+                location = f" `{comment.path}`"
+                if comment.position:
+                    location += f" (line {comment.position})"
+            snippet = comment.body.strip().replace("\n", " ")
+            if len(snippet) > 300:
+                snippet = snippet[:297] + "..."
+            lines.append(f"- {comment.author}{location}: {snippet}\n  {comment.url}")
+
+        if len(comments) > 10:
+            lines.append(f"...and {len(comments) - 10} more comments.")
+        summary_text = "\n".join(lines)
+        await self._send_message(channel, thread_ts, summary_text)
+
+        prompt = self._build_review_prompt(pr_ref.url, comments)
+        await self._execute_agent_task(session, project, channel, thread_ts, prompt)
 
     def _build_task_text(self, history: Sequence, user_text: str) -> str:
         recent = history[-5:]
@@ -310,9 +402,7 @@ class Router:
 
         base = project.github.default_base_branch
         await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", base])
-        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
-        await self._run_git(repo_path, ["checkout", "-B", branch])
+        await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
 
     async def _publish_branch_update(self, session: Session, project: Project) -> Optional[str]:
         branch = f"remote-coder-{session.id}"
@@ -359,8 +449,6 @@ class Router:
             return
 
         await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", base])
-        await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
         await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
 
     async def _commit_changes(self, repo_path: Path, session: Session) -> bool:
@@ -392,6 +480,25 @@ class Router:
             )
 
         return await asyncio.to_thread(_execute)
+
+    def _build_review_prompt(self, pr_url: str, comments: list[PRComment]) -> str:
+        lines = [
+            f"The pull request to update is: {pr_url}",
+            "Address each unresolved review comment by making code changes, running relevant validations, "
+            "and marking the comment as resolved via the updates you push.",
+            "",
+            "Comments:",
+        ]
+        for idx, comment in enumerate(comments, start=1):
+            location = comment.path or "unknown file"
+            if comment.position:
+                location = f"{location} (line {comment.position})"
+            body = comment.body.strip().replace("\n", " ")
+            lines.append(f"{idx}. {comment.author} - {location}: {body}")
+        lines.append(
+            "Focus on implementing the requested changes, keeping git history clean, and summarizing what you fixed."
+        )
+        return "\n".join(lines)
 
     def _get_adapter(self, agent: Agent) -> AgentAdapter:
         cached = self._adapter_cache.get(agent.id)
