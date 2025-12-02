@@ -13,7 +13,7 @@ from uuid import UUID
 from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter
 from ..chat_adapters.i_chat_adapter import IChatAdapter
 from ..github import GitHubManager
-from ..github.client import EnsurePROptions
+from ..github.client import EnsurePROptions, PRComment
 from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
 from .config import Config
 from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
@@ -114,7 +114,7 @@ class Router:
         thread_ts: str,
         user_text: str,
         session_created: bool,
-    ) -> None:
+        ) -> None:
         if session_created:
             await self._send_message(
                 channel_id,
@@ -139,6 +139,16 @@ class Router:
                 )
             return
 
+        await self._execute_agent_task(session, project, channel_id, thread_ts, user_text)
+
+    async def _execute_agent_task(
+        self,
+        session: Session,
+        project: Project,
+        channel_id: str,
+        thread_ts: str,
+        user_text: str,
+    ) -> None:
         agent = self._config.get_agent(session.active_agent_id)
         adapter = self._get_adapter(agent)
 
@@ -320,7 +330,11 @@ class Router:
 
         if len(comments) > 10:
             lines.append(f"...and {len(comments) - 10} more comments.")
-        await self._send_message(channel, thread_ts, "\n".join(lines))
+        summary_text = "\n".join(lines)
+        await self._send_message(channel, thread_ts, summary_text)
+
+        prompt = self._build_review_prompt(pr_ref.url, comments)
+        await self._execute_agent_task(session, project, channel, thread_ts, prompt)
 
     def _build_task_text(self, history: Sequence, user_text: str) -> str:
         recent = history[-5:]
@@ -466,6 +480,25 @@ class Router:
             )
 
         return await asyncio.to_thread(_execute)
+
+    def _build_review_prompt(self, pr_url: str, comments: list[PRComment]) -> str:
+        lines = [
+            f"The pull request to update is: {pr_url}",
+            "Address each unresolved review comment by making code changes, running relevant validations, "
+            "and marking the comment as resolved via the updates you push.",
+            "",
+            "Comments:",
+        ]
+        for idx, comment in enumerate(comments, start=1):
+            location = comment.path or "unknown file"
+            if comment.position:
+                location = f"{location} (line {comment.position})"
+            body = comment.body.strip().replace("\n", " ")
+            lines.append(f"{idx}. {comment.author} - {location}: {body}")
+        lines.append(
+            "Focus on implementing the requested changes, keeping git history clean, and summarizing what you fixed."
+        )
+        return "\n".join(lines)
 
     def _get_adapter(self, agent: Agent) -> AgentAdapter:
         cached = self._adapter_cache.get(agent.id)
