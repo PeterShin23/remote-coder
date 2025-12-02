@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -401,8 +400,8 @@ class Router:
             return
 
         base = project.github.default_base_branch
-        await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
+        await self._prepare_base_branch(repo_path, base, require_clean=True)
+        await self._run_git(repo_path, ["checkout", "-B", branch, base])
 
     async def _publish_branch_update(self, session: Session, project: Project) -> Optional[str]:
         branch = f"remote-coder-{session.id}"
@@ -448,8 +447,8 @@ class Router:
             await self._run_git(repo_path, ["checkout", "-b", branch])
             return
 
-        await self._run_git(repo_path, ["fetch", "origin", base])
-        await self._run_git(repo_path, ["checkout", "-B", branch, f"origin/{base}"])
+        await self._prepare_base_branch(repo_path, base)
+        await self._run_git(repo_path, ["checkout", "-B", branch, base])
 
     async def _commit_changes(self, repo_path: Path, session: Session) -> bool:
         message = f"Remote Coder update for session {session.id}"
@@ -480,6 +479,19 @@ class Router:
             )
 
         return await asyncio.to_thread(_execute)
+
+    async def _prepare_base_branch(self, repo_path: Path, base: str, require_clean: bool = False) -> None:
+        if require_clean and await self._repo_has_changes(repo_path):
+            raise GitHubError(
+                "Working tree has local changes. Commit or stash them before starting a new session."
+            )
+        await self._run_git(repo_path, ["fetch", "origin", base])
+        show_ref = await self._run_git(repo_path, ["show-ref", "--verify", f"refs/heads/{base}"], check=False)
+        if show_ref.returncode != 0:
+            await self._run_git(repo_path, ["checkout", "-B", base, f"origin/{base}"])
+        else:
+            await self._run_git(repo_path, ["checkout", base])
+            await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
 
     def _build_review_prompt(self, pr_url: str, comments: list[PRComment]) -> str:
         lines = [
