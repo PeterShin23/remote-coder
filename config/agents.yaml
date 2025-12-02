@@ -4,15 +4,15 @@
 agents:
   codex-cli:
     kind: cli
-    command: ["codex-cli"]
-    working_dir_mode: project  # Run in project directory
+    command: ["codex"]
+    working_dir_mode: project # Run in project directory
 
   claude-code:
     kind: cli
-    command: ["claude-code"]
+    command: ["claude"]
     working_dir_mode: project
 
   gemini-cli:
     kind: cli
-    command: ["gemini-cli"]
+    command: ["gemini"]
     working_dir_mode: project

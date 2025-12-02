@@ -34,7 +34,7 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
       }
    }
    ```
-   - Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions).
+   - Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions).
    - Under **Event Subscriptions**, turn it on, choose Socket Mode delivery, and subscribe to:
      - `app_mention` (always required so mentions work).
      - `message.channels` if you want to react to all channel traffic.
@@ -67,6 +67,11 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
    uv run python -m src
    ```
    You should see log lines confirming the Slack Socket Mode connection. Mention or DM the bot (from the allowed user) to verify you see logging output.
+   - Built-in Slack thread commands (prefix with `!` after optionally mentioning the bot):
+     - `!switch <agent-id>` – switch the current session to another configured agent.
+     - `!end` – stop the agent process and end the current session.
+     - `!stop-agent <agent-id>` – kill every running process for the given agent across sessions.
+     - `!stop-all` – kill every running agent process (useful if something is stuck).
 
 ## Useful Links
 

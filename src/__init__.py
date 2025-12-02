@@ -1,7 +1,7 @@
 """
-Cockpit Coder Python package.
+Remote Coder Python package.
 
 Provides Slack-first orchestration of local coding agents.
 """
 
-__all__ = []
+__all__: list[str] = []

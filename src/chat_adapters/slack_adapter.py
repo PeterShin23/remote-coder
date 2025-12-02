@@ -13,8 +13,8 @@ from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.web.async_client import AsyncWebClient
 
 from .i_chat_adapter import IChatAdapter
-from ..errors import SlackError
-from ..router import Router
+from ..core.errors import SlackError
+from ..core.router import Router
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class SlackAdapter(IChatAdapter):
         self._router = router
         self._allowed_user_id = allowed_user_id
         self._stop_event = asyncio.Event()
+        self._channel_name_cache: Dict[str, str] = {}
         self._client.socket_mode_request_listeners.append(self._handle_socket_request)
 
     async def send_message(self, channel: str, thread_ts: str, text: str) -> None:
@@ -74,4 +75,24 @@ class SlackAdapter(IChatAdapter):
             LOGGER.debug("Ignoring Slack event type %s with subtype %s", event_type, subtype)
             return
 
+        await self._inject_channel_name(event)
         await self._router.handle_message(event)
+
+    async def _inject_channel_name(self, event: Dict[str, Any]) -> None:
+        channel_id = event.get("channel")
+        if not channel_id:
+            return
+        if channel_id in self._channel_name_cache:
+            event.setdefault("channel_name", self._channel_name_cache[channel_id])
+            return
+        try:
+            result = await self._web_client.conversations_info(channel=channel_id)
+        except SlackApiError as exc:
+            LOGGER.debug("Failed to resolve channel %s: %s", channel_id, exc)
+            return
+
+        channel = result.get("channel") or {}
+        name = channel.get("name")
+        if name:
+            self._channel_name_cache[channel_id] = name
+            event["channel_name"] = name

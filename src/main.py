@@ -9,9 +9,8 @@ import signal
 
 from dotenv import load_dotenv
 
-from .config import Config, load_config
-from .router import Router
-from .session_manager import SessionManager
+from .core import Config, Router, SessionManager, load_config
+from .agents import ProcessManager
 from .chat_adapters.slack_adapter import SlackAdapter
 
 LOGGER = logging.getLogger(__name__)
@@ -33,13 +32,15 @@ async def _run_async() -> None:
     )
 
     session_manager = SessionManager()
-    router = Router(session_manager, config)
+    process_manager = ProcessManager()
+    router = Router(session_manager, process_manager, config)
     slack_adapter = SlackAdapter(
         bot_token=config.slack_bot_token,
         app_token=config.slack_app_token,
         allowed_user_id=config.slack_allowed_user_id,
         router=router,
     )
+    router.bind_adapter(slack_adapter)
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()

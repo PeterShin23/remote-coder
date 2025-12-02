@@ -51,7 +51,7 @@ class Config:
 
 
 def load_config(base_dir: Path | None = None) -> Config:
-    root = base_dir or Path(__file__).resolve().parents[1]
+    root = base_dir or Path(__file__).resolve().parents[2]
     projects = _load_projects(root / "config" / "projects.yaml")
     agents = _load_agents(root / "config" / "agents.yaml")
 
