@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import subprocess
 import time
 from pathlib import Path
@@ -21,21 +20,30 @@ from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
 from .models import Agent, AgentType, Project, Session, SessionStatus
 from .session_manager import SessionManager
 
-PR_TITLE_PATTERN = re.compile(r"(?im)^PR\s*Title:\s*(.+)$")
 LOGGER = logging.getLogger(__name__)
 
 CODE_TASK_WRAPPER = """You are Remote Coder, an autonomous developer working inside the user's repository.
 
 1. Carefully read the latest Slack request and decide whether it requires code changes.
 2. If it does, plan the steps, edit the files directly, and ensure the work is ready for a pull request (run relevant tests/linters when needed).
-3. Summarize the changes you made in a concise, user-friendly way. Mention any follow-up work or tests the user should run.
-4. If no code changes are required, explain why and offer guidance instead of editing files.
-5. Never fabricate results or skip steps—only describe what you actually verified or changed.
-6. End every response with:
-   PR Title: <short phrase describing the major change (few words)>
-   Summary:
-   - <few words for the first major change>
-   - <few words for the next major change (omit minor tweaks)>
+3. If no code changes are required, explain why and offer guidance instead of editing files.
+4. Never fabricate results or skip steps—only describe what you actually verified or changed.
+5. Code changes are ALWAYS automatically committed and pushed - NEVER ask for approval or say "awaiting approval".
+
+CRITICAL: You MUST end your response with a JSON block starting with "REMOTE_CODER_OUTPUT:" followed by valid JSON with DOUBLE QUOTES (not single quotes).
+
+For code changes (when you made file edits):
+REMOTE_CODER_OUTPUT: {"slack_message": "Brief summary of changes for Slack (plain text, no markdown)", "pr_title": "Short descriptive PR title (few words)", "pr_summary": ["First major change", "Second major change"]}
+
+For questions/explanations (no code changes):
+REMOTE_CODER_OUTPUT: {"slack_message": "Your explanation or answer (plain text, no markdown)", "pr_title": "", "pr_summary": []}
+
+Rules:
+- Use DOUBLE QUOTES in JSON, not single quotes
+- slack_message: Plain text only, NO markdown. Format for Slack's readability. Include file paths, line numbers, and clear explanations. DO NOT mention "awaiting approval" or "waiting for commit" - just describe what you did.
+- pr_title: Short phrase (3-6 words) describing the main change when code changes are made, empty string otherwise
+- pr_summary: Array of brief bullet points describing major changes (omit minor tweaks), empty array if no code changes
+- The JSON can span multiple lines but must use valid JSON syntax with double quotes
 """
 
 
@@ -201,14 +209,25 @@ class Router:
             # Always clean up the run tracking
             self.active_runs.pop(run_id, None)
 
-        pr_title = self._extract_pr_title(result.output_text or "")
-        if pr_title:
-            self._session_manager.update_session_context(session.id, {"pr_title": pr_title})
+        if result.structured_output:
+            self._session_manager.update_session_context(
+                session.id,
+                {
+                    "pr_title": result.structured_output.pr_title,
+                    "pr_summary": result.structured_output.pr_summary,
+                },
+            )
 
-        response_text = result.output_text or "Agent completed with no textual output."
+        response_text = (
+            result.structured_output.slack_message
+            if result.structured_output
+            else result.output_text or "Agent completed with no textual output."
+        )
+
         if result.errors:
             response_text = f"{response_text}\n\nErrors:\n" + "\n".join(result.errors)
-        if result.file_edits:
+
+        if result.file_edits and not result.structured_output:
             edits_summary = ", ".join({edit.path for edit in result.file_edits})
             response_text = f"{response_text}\n\nDetected file edits: {edits_summary}"
 
@@ -447,15 +466,28 @@ class Router:
         result: AgentResult,
     ) -> Optional[str]:
         if not project.github or not self._github_manager.is_configured():
+            LOGGER.debug("Skipping PR creation: no GitHub config")
             return None
 
+        # Check for actual file changes via git status and agent-reported edits
         repo_path = session.project_path
         has_changes = bool(result.file_edits)
         if not has_changes:
             has_changes = await self._repo_has_changes(repo_path)
+
         if not has_changes:
+            LOGGER.info("No file changes detected - skipping commit/push")
             return None
 
+        # Log structured output if available (for debugging)
+        if result.structured_output:
+            LOGGER.info(
+                "Structured output present: pr_title=%s, summary_items=%d",
+                result.structured_output.pr_title,
+                len(result.structured_output.pr_summary),
+            )
+
+        LOGGER.info("Changes detected - proceeding with commit and push")
         try:
             return await self._publish_branch_update(session, project)
         except GitHubError as exc:
@@ -491,12 +523,18 @@ class Router:
 
         existing_pr_number = self._get_existing_pr_number(session.id)
         pr_title = self._get_session_pr_title(session)
+
+        # Build PR body with summary if available
+        pr_summary = session.session_context.get("pr_summary", [])
+        if pr_summary and isinstance(pr_summary, list):
+            summary_text = "\n".join(f"- {item}" for item in pr_summary)
+            body = f"{summary_text}\n\n---\nAutomated changes via Slack thread {session.thread_ts} in channel {session.channel_id}."
+        else:
+            body = f"Automated changes requested via Slack thread {session.thread_ts} in channel {session.channel_id}."
+
         options = EnsurePROptions(
             title=pr_title,
-            body=(
-                f"Automated changes requested via Slack thread {session.thread_ts} "
-                f"in channel {session.channel_id}."
-            ),
+            body=body,
         )
         pr_ref = await self._github_manager.ensure_pull_request(
             project=project,
@@ -506,7 +544,7 @@ class Router:
             existing_number=existing_pr_number,
         )
         self._session_manager.set_pr_ref(pr_ref)
-        return f"Pushed updates to branch `{branch}` and linked PR: {pr_ref.url}"
+        return f"Pushed updates to branch `{branch}`\nLinked PR: {pr_ref.url}"
 
     async def _repo_has_changes(self, repo_path: Path) -> bool:
         result = await self._run_git(repo_path, ["status", "--porcelain"])
@@ -590,17 +628,6 @@ class Router:
             "Focus on implementing the requested changes, keeping git history clean, and summarizing what you fixed."
         )
         return "\n".join(lines)
-
-    def _extract_pr_title(self, text: str) -> Optional[str]:
-        match = PR_TITLE_PATTERN.search(text)
-        if not match:
-            return None
-        title = match.group(1).strip()
-        if not title:
-            return None
-        if len(title) > 120:
-            title = title[:117].rstrip() + "..."
-        return title.rstrip(".")
 
     def _get_session_pr_title(self, session: Session) -> str:
         context_title = session.session_context.get("pr_title")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Sequence
 
 from ..core.models import Agent, AgentType, WorkingDirMode
-from .base import AgentAdapter, AgentResult, FileEdit
+from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
 LOGGER = logging.getLogger(__name__)
 
@@ -107,10 +107,10 @@ class GeminiAdapter(AgentAdapter):
         # Combine all text chunks (already properly assembled from deltas)
         # Each chunk is a complete message, so join with newlines
         output_text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
-
-        # If no structured output was extracted, fall back to raw events
         if not output_text and raw_events:
             output_text = "\n".join(raw_events).strip()
+        raw_output = "\n".join(raw_events + ([stderr_output] if stderr_output else []))
+        structured_output = parse_structured_output(output_text or raw_output)
 
         return AgentResult(
             success=success,
@@ -118,7 +118,8 @@ class GeminiAdapter(AgentAdapter):
             file_edits=file_edits,
             errors=[err for err in errors if err],
             session_context={},
-            raw_output="\n".join(raw_events + ([stderr_output] if stderr_output else [])),
+            raw_output=raw_output,
+            structured_output=structured_output,
         )
 
     def _resolve_workdir(self, project_path: str) -> Path:
