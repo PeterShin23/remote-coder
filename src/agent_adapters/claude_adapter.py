@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
 from ..core.models import Agent, AgentType, WorkingDirMode
-from .base import AgentAdapter, AgentResult, FileEdit
+from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
 LOGGER = logging.getLogger(__name__)
 
@@ -82,7 +82,10 @@ class ClaudeAdapter(AgentAdapter):
             errors.append(stderr_output)
 
         success = return_code == 0
+
         output_text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
+        raw_output = "\n".join(raw_events + ([stderr_output] if stderr_output else []))
+        structured_output = parse_structured_output(output_text or raw_output)
 
         return AgentResult(
             success=success,
@@ -90,7 +93,8 @@ class ClaudeAdapter(AgentAdapter):
             file_edits=file_edits,
             errors=[err for err in errors if err],
             session_context={},
-            raw_output="\n".join(raw_events + ([stderr_output] if stderr_output else [])),
+            raw_output=raw_output,
+            structured_output=structured_output,
         )
 
     def _build_command(self, session_id: str) -> list[str]:

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Sequence
 
 from ..core.models import Agent, AgentType, WorkingDirMode
-from .base import AgentAdapter, AgentResult, FileEdit
+from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
 
 class CodexAdapter(AgentAdapter):
@@ -76,6 +76,8 @@ class CodexAdapter(AgentAdapter):
         output_text = self._extract_primary_output(stdout_text)
         if not output_text:
             output_text = stdout_text or stderr_text
+        raw_output = "\n".join(filter(None, [stdout_text, stderr_text]))
+        structured_output = parse_structured_output(output_text or raw_output)
 
         return AgentResult(
             success=success,
@@ -83,7 +85,8 @@ class CodexAdapter(AgentAdapter):
             file_edits=file_edits,
             errors=errors,
             session_context={},
-            raw_output="\n".join(filter(None, [stdout_text, stderr_text])),
+            raw_output=raw_output,
+            structured_output=structured_output,
         )
 
     def _resolve_workdir(self, project_path: str) -> Path:
