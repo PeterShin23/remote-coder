@@ -6,11 +6,12 @@ import asyncio
 import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 from uuid import UUID
 
-from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter
+from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter, GeminiAdapter
 from ..chat_adapters.i_chat_adapter import IChatAdapter
 from ..github import GitHubManager
 from ..github.client import EnsurePROptions, PRComment
@@ -53,6 +54,7 @@ class Router:
         self._chat_adapter: Optional[IChatAdapter] = None
         self._adapter_cache: Dict[str, AgentAdapter] = {}
         self._session_locks: Dict[str, asyncio.Lock] = {}
+        self.active_runs: Dict[str, Dict[str, Any]] = {}
 
     def bind_adapter(self, adapter: IChatAdapter) -> None:
         """Attach the chat adapter so the router can send replies."""
@@ -170,6 +172,16 @@ class Router:
 
         self._session_manager.append_user_message(session.id, user_text)
 
+        # Track this run for potential cancellation via !purge
+        run_id = f"{channel_id}_{thread_ts}_{int(time.time() * 1000)}"
+        run_task = asyncio.current_task()
+        self.active_runs[run_id] = {
+            "task": run_task,
+            "session_id": str(session.id),
+            "agent_id": agent.id,
+            "started_at": time.time(),
+        }
+
         try:
                 result = await adapter.run(
                     task_text=task_text,
@@ -185,6 +197,9 @@ class Router:
                 f"Failed to run `{agent.id}`: {exc}",
             )
             return
+        finally:
+            # Always clean up the run tracking
+            self.active_runs.pop(run_id, None)
 
         pr_title = self._extract_pr_title(result.output_text or "")
         if pr_title:
@@ -219,7 +234,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end", "review", "help", "commands"}:
+        if name in {"use", "status", "end", "review", "help", "commands", "purge"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -239,6 +254,8 @@ class Router:
             await self._command_status(session, channel_id, thread_ts)
         elif command.name == "review":
             await self._command_review(session, project, channel_id, thread_ts)
+        elif command.name == "purge":
+            await self._command_purge(channel_id, thread_ts)
         elif command.name in {"help", "commands"}:
             await self._command_help(channel_id, thread_ts)
         else:
@@ -251,6 +268,7 @@ class Router:
         channel: str,
         thread_ts: str,
     ) -> None:
+        LOGGER.info("Executing !use command in channel %s, thread %s", channel, thread_ts)
         if not command.args:
             await self._send_message(channel, thread_ts, "Usage: use <agent-id>")
             return
@@ -263,16 +281,20 @@ class Router:
             return
 
         self._session_manager.set_active_agent(session.id, agent_id, agent.type)
+        LOGGER.info("Switched session %s to agent %s", session.id, agent_id)
         await self._send_message(channel, thread_ts, f"Switched to `{agent_id}`")
 
     async def _command_end_session(self, session: Session, channel: str, thread_ts: str) -> None:
+        LOGGER.info("Executing !end command in channel %s, thread %s", channel, thread_ts)
         if session.status == SessionStatus.ENDED:
             await self._send_message(channel, thread_ts, "Session already ended.")
             return
         self._session_manager.update_status(session.id, SessionStatus.ENDED)
+        LOGGER.info("Ended session %s", session.id)
         await self._send_message(channel, thread_ts, "Session ended. Start a new thread to begin again.")
 
     async def _command_status(self, session: Session, channel: str, thread_ts: str) -> None:
+        LOGGER.debug("Executing !status command in channel %s, thread %s", channel, thread_ts)
         history = self._session_manager.get_conversation_history(session.id)
         status_lines = [
             f"Session ID: `{session.id}`",
@@ -286,15 +308,59 @@ class Router:
     async def _command_help(self, channel: str, thread_ts: str) -> None:
         lines = [
             "Available commands:",
-            "- `!use <agent>` – Use configured coding agent. `claude` | `codex`",
+            "- `!use <agent>` – Use configured coding agent. `claude` | `codex` | `gemini`",
             "- `!status` – Show session, active agent, and history count.",
             "- `!review` – List unresolved GitHub review comments for this session's PR.",
             "- `!end` – End the session (start a new Slack thread to reset).",
+            "- `!purge` – Cancel all running agent tasks and clear all sessions.",
             "- `!help` – Show this command list.",
             "",
             "Send any other message to run the current agent once with that request.",
         ]
         await self._send_message(channel, thread_ts, "\n".join(lines))
+
+    async def _command_purge(self, channel: str, thread_ts: str) -> None:
+        """Cancel all active agent runs and clear all sessions."""
+        LOGGER.info("Executing !purge command in channel %s, thread %s", channel, thread_ts)
+
+        # Cancel all active runs
+        num_cancelled = 0
+        if self.active_runs:
+            LOGGER.info("Cancelling %d active agent run(s)", len(self.active_runs))
+            tasks_to_cancel = []
+            for run_info in list(self.active_runs.values()):
+                task = run_info.get("task")
+                if task and not task.done():
+                    task.cancel()
+                    tasks_to_cancel.append(task)
+
+            # Wait for all cancellations to complete
+            if tasks_to_cancel:
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+            num_cancelled = len(self.active_runs)
+            self.active_runs.clear()
+        else:
+            LOGGER.info("No active agent runs to cancel")
+
+        # Clear all sessions
+        num_sessions = len(self._session_manager._sessions)
+        if num_sessions > 0:
+            LOGGER.info("Clearing %d session(s)", num_sessions)
+            self._session_manager._sessions.clear()
+            self._session_manager._thread_index.clear()
+            self._session_manager._pr_refs.clear()
+        else:
+            LOGGER.info("No sessions to clear")
+
+        # Send confirmation
+        if num_cancelled > 0 or num_sessions > 0:
+            message = f"Stopped {num_cancelled} running agent task(s) and cleared {num_sessions} session(s). Remote Coder is now in a clean state."
+        else:
+            message = "No active agent tasks. All sessions cleared. Remote Coder is in a clean state."
+
+        LOGGER.info("Purge completed: cancelled %d task(s), cleared %d session(s)", num_cancelled, num_sessions)
+        await self._send_message(channel, thread_ts, message)
 
     async def _command_review(
         self,
@@ -303,6 +369,7 @@ class Router:
         channel: str,
         thread_ts: str,
     ) -> None:
+        LOGGER.info("Executing !review command in channel %s, thread %s", channel, thread_ts)
         if not project.github:
             await self._send_message(channel, thread_ts, "This project has no GitHub configuration.")
             return
@@ -555,6 +622,8 @@ class Router:
             return ClaudeAdapter(agent)
         if agent.type == AgentType.CODEX:
             return CodexAdapter(agent)
+        if agent.type == AgentType.GEMINI:
+            return GeminiAdapter(agent)
         raise ValueError(f"No adapter available for agent type {agent.type}")
 
     def _get_session_lock(self, session_key: str) -> asyncio.Lock:

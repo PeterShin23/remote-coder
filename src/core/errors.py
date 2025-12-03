@@ -1,37 +1,37 @@
-"""Custom exception hierarchy for Cockpit Coder."""
+"""Custom exception hierarchy for Remote Coder."""
 
 
-class CockpitError(Exception):
+class RemoteCoderError(Exception):
     """Base error type."""
 
 
-class ProjectNotFound(CockpitError):
+class ProjectNotFound(RemoteCoderError):
     pass
 
 
-class SessionNotFound(CockpitError):
+class SessionNotFound(RemoteCoderError):
     pass
 
 
-class AgentNotFound(CockpitError):
+class AgentNotFound(RemoteCoderError):
     pass
 
 
-class CommandNotFound(CockpitError):
+class CommandNotFound(RemoteCoderError):
     pass
 
 
-class ProcessError(CockpitError):
+class ProcessError(RemoteCoderError):
     pass
 
 
-class ConfigError(CockpitError):
+class ConfigError(RemoteCoderError):
     pass
 
 
-class SlackError(CockpitError):
+class SlackError(RemoteCoderError):
     pass
 
 
-class GitHubError(CockpitError):
+class GitHubError(RemoteCoderError):
     pass

@@ -3,6 +3,7 @@
 from .base import AgentAdapter, AgentResult, FileEdit
 from .claude_adapter import ClaudeAdapter
 from .codex_adapter import CodexAdapter
+from .gemini_adapter import GeminiAdapter
 
 __all__ = [
     "AgentAdapter",
@@ -10,4 +11,5 @@ __all__ = [
     "FileEdit",
     "ClaudeAdapter",
     "CodexAdapter",
+    "GeminiAdapter",
 ]
