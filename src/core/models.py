@@ -1,4 +1,4 @@
-"""Domain models for Cockpit Coder."""
+"""Domain models for Remote Coder."""
 
 from __future__ import annotations
 

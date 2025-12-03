@@ -22,3 +22,13 @@ agents:
       - --sandbox
       - workspace-write
     working_dir_mode: project
+
+  gemini:
+    type: gemini
+    command:
+      - gemini
+      - --approval-mode
+      - auto_edit
+      - --output-format
+      - stream-json
+    working_dir_mode: project

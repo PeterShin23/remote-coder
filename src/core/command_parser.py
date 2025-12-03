@@ -1,5 +1,3 @@
-"""Lightweight parser for Cockpit commands."""
-
 from __future__ import annotations
 
 import re

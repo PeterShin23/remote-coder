@@ -3,7 +3,7 @@
 from .config import Config, load_config
 from .errors import (
     AgentNotFound,
-    CockpitError,
+    RemoteCoderError,
     CommandNotFound,
     ConfigError,
     GitHubError,
@@ -40,7 +40,7 @@ __all__ = [
     "Session",
     "SessionStatus",
     "WorkingDirMode",
-    "CockpitError",
+    "RemoteCoderError",
     "ProjectNotFound",
     "AgentNotFound",
     "CommandNotFound",

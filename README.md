@@ -2,6 +2,15 @@
 
 Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your machine, using the official Slack SDK (Socket Mode) and PyGithub.
 
+## Features
+
+- **Slack-first control center** – Operate your daemon entirely through Slack. Send requests, monitor output, and manage sessions without leaving your workspace.
+- **Channel-to-repository mapping** – Each Slack channel connects to a configured local repository, keeping project contexts organized.
+- **Thread-based sessions** – Every Slack thread is an isolated session with its own state, enabling concurrent work on the same repository.
+- **Automatic PR management** – Changes are committed, pushed, and linked to GitHub pull requests automatically. Updates flow back to Slack with PR links.
+- **Multi-agent support** – Switch between coding agents (Claude, Codex, Gemini) mid-session with a single command. No need to restart.
+- **Zero API key overhead** – Uses local coding agent CLI installations. No additional LLM API keys required beyond what your CLIs already use.
+
 ## Getting Started
 
 > Prerequisites: Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/), Slack workspace admin access (to create an app), and a GitHub account.
@@ -87,7 +96,7 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
      ```yaml
      agents:
        claude:
-         type: claude # supported: claude, codex (gemini coming soon)
+         type: claude # supported: claude, codex, gemini
          command: ["claude", "--print", "--permission-mode", "acceptEdits", ...]
          working_dir_mode: project
          env:
@@ -103,8 +112,9 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
    - Built-in Slack thread commands (either `!command` or `@remote-coder command`):
      - `!use <agent-id>` / `@remote-coder use <agent-id>` – use a different coding agent in the current session.
      - `!status` / `@remote-coder status` – display the active agent and message history count.
-     - `!review` / `@remote-coder review pr` – list unresolved GitHub review comments for the session’s pull request and immediately run the active agent to address them (requires GitHub token + project metadata).
+     - `!review` / `@remote-coder review pr` – list unresolved GitHub review comments for the session's pull request and immediately run the active agent to address them (requires GitHub token + project metadata).
      - `!end` / `@remote-coder end` – end the current session (start a new Slack thread to reset state).
+     - `!purge` / `@remote-coder purge` – cancel all running agent tasks and clear all sessions (useful for resetting daemon state without restarting).
      - `!help` / `@remote-coder help` – show the available commands.
    - **Automatic PR workflow**:
      - When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch.
@@ -116,4 +126,7 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 - Slack Socket Mode Docs: <https://api.slack.com/apis/connections/socket>
 - Slack App Management: <https://api.slack.com/apps>
 - PyGithub: <https://pygithub.readthedocs.io/>
-- uv Tooling: <https://docs.astral.sh/uv/>
+
+## Personal Notes
+
+1. Using Gemini CLI is kinda slow for some reason. Recommending you use the actual paid stuff first until you hit the limits first like claude code and codex cli before using gemini. Just my opinion. Do what you want.

@@ -1,4 +1,4 @@
-"""Manage active Cockpit sessions."""
+"""Manage active sessions."""
 
 from __future__ import annotations
 
