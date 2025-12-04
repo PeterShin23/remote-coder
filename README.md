@@ -106,7 +106,7 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 
 7. **Run the daemon**
    ```bash
-   uv run python -m src
+   caffeinate -i uv run python -m src
    ```
    You should see log lines confirming the Slack Socket Mode connection. Mention or DM the bot (from the allowed user) to verify you see logging output.
    - Built-in Slack thread commands (either `!command` or `@remote-coder command`):
