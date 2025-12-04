@@ -16,12 +16,23 @@ agents:
 
   codex:
     type: codex
+    # WARNING: Be careful of prompt injection when using web search with codex!
+    # To enable web search, use the following command format:
+    # command:
+    #   - codex
+    #   - exec
+    #   - --sandbox
+    #   - workspace-write
+    #   - --config
+    #   - features.web_search_request=true
+    #   - --config
+    #   - sandbox_workspace_write.network_access=true
+    #   - --search
     command:
       - codex
       - exec
-      - workspace-write
       - --sandbox
-      - --search
+      - workspace-write
     working_dir_mode: project
 
   gemini:
