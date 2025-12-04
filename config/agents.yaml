@@ -28,7 +28,6 @@ agents:
     #   - --config
     #   - sandbox_workspace_write.network_access=true
     #   - --search
-    #   - "YOUR PROMPT HERE"
     command:
       - codex
       - exec
