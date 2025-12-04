@@ -335,8 +335,6 @@ class Router:
             "- `!end` – End the session (start a new Slack thread to reset).",
             "- `!purge` – Cancel all running agent tasks and clear all sessions.",
             "- `!agents` – List all configured coding agents.",
-            "- `!reload-config` – Reload projects.yaml configuration.",
-            "- `!stop-all` – Stop all active sessions across workspace.",
             "- `!help` – Show this command list.",
             "",
             "Send any other message to run the current agent once with that request.",

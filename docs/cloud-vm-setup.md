@@ -307,8 +307,6 @@ Use Remote Coder's built-in commands:
 - `!status` - Check current session status
 - `!agents` - List available agents
 - `!purge` - Clear all sessions and cancel running tasks
-- `!stop-all` - Stop all active sessions (coming in Phase 2)
-- `!reload-config` - Reload configuration without restart (coming in Phase 2)
 
 ## Security Considerations
 
