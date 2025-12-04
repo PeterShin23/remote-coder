@@ -20,6 +20,7 @@ agents:
       - codex
       - exec
       - --sandbox
+      - --search
       - workspace-write
     working_dir_mode: project
 
