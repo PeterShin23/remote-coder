@@ -19,8 +19,7 @@ agents:
     command:
       - codex
       - exec
-      - workspace-write
-      - --sandbox
+      - --yes
       - --search
     working_dir_mode: project
 
