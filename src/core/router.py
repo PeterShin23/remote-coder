@@ -253,7 +253,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end", "review", "help", "commands", "purge"}:
+        if name in {"use", "status", "end", "review", "help", "commands", "purge", "agents"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -275,6 +275,8 @@ class Router:
             await self._command_review(session, project, channel_id, thread_ts)
         elif command.name == "purge":
             await self._command_purge(channel_id, thread_ts)
+        elif command.name == "agents":
+            await self._command_agents(channel_id, thread_ts)
         elif command.name in {"help", "commands"}:
             await self._command_help(channel_id, thread_ts)
         else:
@@ -332,11 +334,19 @@ class Router:
             "- `!review` – List unresolved GitHub review comments for this session's PR.",
             "- `!end` – End the session (start a new Slack thread to reset).",
             "- `!purge` – Cancel all running agent tasks and clear all sessions.",
+            "- `!agents` – List all configured coding agents.",
             "- `!help` – Show this command list.",
             "",
             "Send any other message to run the current agent once with that request.",
         ]
         await self._send_message(channel, thread_ts, "\n".join(lines))
+
+    async def _command_agents(self, channel: str, thread_ts: str) -> None:
+        """List all configured agents."""
+        agent_lines = ["Available agents:"]
+        for agent_id, agent in self._config.agents.items():
+            agent_lines.append(f"- `{agent_id}` ({agent.type.value})")
+        await self._send_message(channel, thread_ts, "\n".join(agent_lines))
 
     async def _command_purge(self, channel: str, thread_ts: str) -> None:
         """Cancel all active agent runs and clear all sessions."""

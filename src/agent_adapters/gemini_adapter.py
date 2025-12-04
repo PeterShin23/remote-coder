@@ -46,6 +46,12 @@ class GeminiAdapter(AgentAdapter):
             env=env,
         )
 
+        # Increase buffer limit for large JSON responses (default is 64KB)
+        if process.stdout:
+            process.stdout._limit = 10 * 1024 * 1024  # 10MB
+        if process.stderr:
+            process.stderr._limit = 10 * 1024 * 1024  # 10MB
+
         raw_events: list[str] = []
         text_chunks: list[str] = []
         file_edits: list[FileEdit] = []
