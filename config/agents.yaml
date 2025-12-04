@@ -19,9 +19,9 @@ agents:
     command:
       - codex
       - exec
+      - workspace-write
       - --sandbox
       - --search
-      - workspace-write
     working_dir_mode: project
 
   gemini:

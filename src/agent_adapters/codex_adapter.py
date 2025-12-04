@@ -47,6 +47,12 @@ class CodexAdapter(AgentAdapter):
             env=env,
         )
 
+        # Increase buffer limit for large responses (default is 64KB)
+        if process.stdout:
+            process.stdout._limit = 10 * 1024 * 1024  # 10MB
+        if process.stderr:
+            process.stderr._limit = 10 * 1024 * 1024  # 10MB
+
         assert process.stdin is not None
         stdin_payload = (task_text + "\n").encode("utf-8")
         process.stdin.write(stdin_payload)
