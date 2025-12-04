@@ -1,6 +1,18 @@
 # Remote Coder
 
-Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine.
+Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine or cloud VM.
+
+## Philosophy
+
+Remote Coder uses **subscription-based coding tools** via their CLIs:
+- Claude Code (Claude Pro/Max subscription)
+- Codex (ChatGPT/Codex subscription)
+- Gemini Code Assist (Google Cloud subscription)
+- Qwen Code (via OpenRouter API key)
+
+We do NOT use metered API keys like `CLAUDE_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`.
+
+📖 See [docs/usage-philosophy.md](docs/usage-philosophy.md) for the full rationale.
 
 ## Features
 
@@ -120,6 +132,24 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
      - When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch.
      - A link to the PR is posted in the Slack thread after every successful push so you can review progress immediately.
      - Make sure each project in `config/projects.yaml` points to a git repository with a clean working tree and a reachable `origin` remote, and that `config/projects.yaml` includes the repository’s GitHub metadata (`owner`, `repo`, and `default_base_branch`).
+
+## Running on Cloud VM
+
+Remote Coder can run on any cloud VM (AWS EC2, DigitalOcean, Google Cloud, etc.).
+
+📖 See [docs/cloud-vm-setup.md](docs/cloud-vm-setup.md) for complete setup instructions.
+
+**Quick start:**
+1. Launch a VM (Ubuntu 22.04, 2 vCPUs, 4 GB RAM recommended)
+2. Clone repo and install dependencies
+3. Configure environment variables and `config/projects.yaml`
+4. Install and authenticate agent CLIs (claude, codex, gemini)
+5. Run as daemon: `uv run python -m src` (or use systemd for production)
+
+## Documentation
+
+- [Usage Philosophy](docs/usage-philosophy.md) - Why we use subscription CLIs
+- [Cloud VM Setup Guide](docs/cloud-vm-setup.md) - Deploying to AWS, DigitalOcean, etc.
 
 ## Useful Links
 
