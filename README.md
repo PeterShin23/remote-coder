@@ -8,7 +8,6 @@ Remote Coder uses **subscription-based coding tools** via their CLIs:
 - Claude Code (Claude Pro/Max subscription)
 - Codex (ChatGPT/Codex subscription)
 - Gemini Code Assist (Google Cloud subscription)
-- Qwen Code (via OpenRouter API key)
 
 We do NOT use metered API keys like `CLAUDE_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`.
 

@@ -20,7 +20,8 @@ Running Remote Coder on a cloud VM provides several benefits:
 - **OS**: Ubuntu 22.04 LTS or Ubuntu 24.04 LTS
 
 ### AWS EC2 Instance Types
-- **t3.medium** or **t3.small** - Good balance of performance and cost
+- **t3.micro** - Recommended starting point, good balance of performance and cost
+- **t3.medium** or **t3.small** - For larger workloads
 - **t4g.medium** (ARM-based) - Cost-effective alternative
 
 ### Other Cloud Providers
