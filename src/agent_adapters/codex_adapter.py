@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
 from ..core.models import Agent, AgentType, WorkingDirMode
 from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
+LOGGER = logging.getLogger(__name__)
+
 
 class CodexAdapter(AgentAdapter):
     """Executes Codex CLI commands in one-shot mode."""
-
-    _FILE_EDIT_PATTERNS = [
-        re.compile(r"^(EDIT|CREATE|DELETE)\s+(.+)$", re.IGNORECASE),
-        re.compile(r"^Applying (?:edit|patch) to\s+(.+)$", re.IGNORECASE),
-        re.compile(r"^Wrote\s+(.+)$", re.IGNORECASE),
-    ]
 
     def __init__(self, agent: Agent) -> None:
         if agent.type != AgentType.CODEX:
@@ -38,6 +35,7 @@ class CodexAdapter(AgentAdapter):
         workdir = self._resolve_workdir(project_path)
         env = {**os.environ, **self._agent.env}
 
+        LOGGER.info("Running Codex one-shot command in %s", workdir)
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -47,7 +45,6 @@ class CodexAdapter(AgentAdapter):
             env=env,
         )
 
-        # Increase buffer limit for large responses (default is 64KB)
         if process.stdout:
             process.stdout._limit = 10 * 1024 * 1024  # 10MB
         if process.stderr:
@@ -59,37 +56,52 @@ class CodexAdapter(AgentAdapter):
         await process.stdin.drain()
         process.stdin.close()
 
-        stdout_stream = process.stdout
-        stderr_stream = process.stderr
-        stdout_bytes, stderr_bytes = await asyncio.gather(
-            stdout_stream.read() if stdout_stream else asyncio.sleep(0, result=b""),
-            stderr_stream.read() if stderr_stream else asyncio.sleep(0, result=b""),
-        )
-        return_code = await process.wait()
+        raw_events: list[str] = []
+        text_chunks: list[str] = []
+        file_edits: list[FileEdit] = []
+        errors: list[str] = []
 
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        assert process.stderr is not None
+        stderr_task = asyncio.create_task(process.stderr.read())
+
+        stdout_stream = process.stdout
+        if stdout_stream:
+            async for raw_line in stdout_stream:
+                decoded = raw_line.decode("utf-8", errors="replace").strip()
+                raw_events.append(decoded)
+                if not decoded:
+                    continue
+
+                parsed = self._parse_json(decoded)
+                if parsed:
+                    LOGGER.debug(f"Parsed Codex JSON event: {parsed}")
+                    text_chunks.extend(self._extract_text_segments(parsed))
+                    file_edits.extend(self._extract_file_edits(parsed))
+                    errors.extend(self._extract_errors(parsed))
+                else:
+                    text_chunks.append(decoded)
+
+        return_code = await process.wait()
+        stderr_raw = await stderr_task
+        stderr_output = stderr_raw.decode("utf-8", errors="replace").strip()
+
         success = return_code == 0
 
-        file_edits = self._parse_file_edits(stdout_text)
-        errors = []
-        if not success:
-            if stderr_text:
-                errors.append(stderr_text)
-            else:
-                errors.append("Codex command failed")
+        # Only treat stderr as an error if the command actually failed
+        if not success and stderr_output:
+            errors.append(stderr_output)
 
-        output_text = self._extract_primary_output(stdout_text)
-        if not output_text:
-            output_text = stdout_text or stderr_text
-        raw_output = "\n".join(filter(None, [stdout_text, stderr_text]))
+        output_text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
+        if not output_text and raw_events:
+            output_text = "\n".join(raw_events).strip()
+        raw_output = "\n".join(raw_events + ([stderr_output] if stderr_output else []))
         structured_output = parse_structured_output(output_text or raw_output)
 
         return AgentResult(
             success=success,
             output_text=output_text,
             file_edits=file_edits,
-            errors=errors,
+            errors=[err for err in errors if err],
             session_context={},
             raw_output=raw_output,
             structured_output=structured_output,
@@ -102,95 +114,89 @@ class CodexAdapter(AgentAdapter):
             return self._agent.fixed_path
         raise ValueError("Fixed working directory required for Codex adapter")
 
-    def _parse_file_edits(self, stdout_text: str) -> list[FileEdit]:
+    def _parse_json(self, line: str) -> Dict[str, Any] | None:
+        """Try to parse a line as JSON."""
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            return None
+
+    def _extract_text_segments(self, payload: Dict[str, Any]) -> list[str]:
+        """Extract text content from Codex JSON event."""
+        segments: list[str] = []
+
+        # Codex JSON format: {"type": "item.completed", "item": {"type": "agent_message", "text": "..."}}
+        if payload.get("type") == "item.completed":
+            item = payload.get("item")
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type == "agent_message":
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        segments.append(text.strip())
+
+        return segments
+
+    def _extract_file_edits(self, payload: Dict[str, Any]) -> list[FileEdit]:
+        """Extract file edits from JSON payload."""
         edits: list[FileEdit] = []
-        for line in stdout_text.splitlines():
-            line = line.strip()
-            if not line:
+
+        # Codex format: {"type": "item.completed", "item": {"type": "file_change", "changes": [...]}}
+        if payload.get("type") == "item.completed":
+            item = payload.get("item")
+            if isinstance(item, dict) and item.get("type") == "file_change":
+                changes = item.get("changes", [])
+                for change in changes:
+                    if isinstance(change, dict):
+                        path = change.get("path")
+                        kind = change.get("kind", "edit")  # 'update', 'create', 'delete'
+                        if path:
+                            edits.append(FileEdit(path=path, type=kind))
+
+        # Also look for tool use events (fallback for other formats)
+        for tool_payload in self._iter_tool_payloads(payload):
+            path = self._extract_path(tool_payload)
+            if not path:
                 continue
-            for pattern in self._FILE_EDIT_PATTERNS:
-                match = pattern.match(line)
-                if not match:
-                    continue
-                if pattern.groups == 2:
-                    edit_type = match.group(1).lower()
-                    path = match.group(2).strip()
-                else:
-                    edit_type = "edit"
-                    path = match.group(match.lastindex or 1).strip()
-                edits.append(FileEdit(path=path, type=edit_type))
-                break
+            edit_type = str(tool_payload.get("name") or tool_payload.get("type") or "edit").lower()
+            diff = tool_payload.get("diff") or tool_payload.get("delta")
+            edits.append(FileEdit(path=path, type=edit_type, diff=diff))
+
         return edits
 
-    def _extract_primary_output(self, stdout_text: str) -> str:
-        lines = [line.rstrip() for line in stdout_text.splitlines()]
-        capture = False
-        collected: list[str] = []
+    def _iter_tool_payloads(self, payload: Dict[str, Any]):
+        """Iterate over tool-related payloads."""
+        keys = ("tool", "tool_use", "toolInvocation", "toolRequest")
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, dict):
+                yield value
+        message = payload.get("message")
+        if isinstance(message, dict):
+            yield from self._iter_tool_payloads(message)
 
-        for line in lines:
-            stripped = line.strip()
-            if not capture:
-                if stripped.lower() == "codex":
-                    capture = True
-                continue
-            if self._should_stop_capture(stripped):
-                break
-            collected.append(line)
+    def _extract_path(self, payload: Dict[str, Any]) -> str | None:
+        """Extract file path from tool payload."""
+        possible_keys = ("path", "file_path", "filePath")
+        for key in possible_keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        input_obj = payload.get("input") or payload.get("arguments") or {}
+        if isinstance(input_obj, dict):
+            for key in possible_keys:
+                value = input_obj.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return None
 
-        cleaned = "\n".join(collected).strip()
-        if cleaned:
-            return cleaned
-        return self._fallback_output(lines)
-
-    def _should_stop_capture(self, stripped: str) -> bool:
-        if not stripped:
-            return False
-        return self._is_metadata_line(stripped)
-
-    def _fallback_output(self, lines: list[str]) -> str:
-        buffer: list[str] = []
-        capturing = False
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                if capturing and buffer:
-                    buffer.append("")
-                continue
-            if self._is_metadata_line(stripped):
-                if capturing and buffer:
-                    break
-                continue
-            capturing = True
-            buffer.append(line)
-        return "\n".join(buffer).strip()
-
-    def _is_metadata_line(self, stripped: str) -> bool:
-        lowered = stripped.lower()
-        if lowered in {"user", "assistant", "system", "thinking", "result", "codex"}:
-            return True
-        prefixes = (
-            "tokens used",
-            "workdir:",
-            "model:",
-            "provider:",
-            "approval:",
-            "sandbox:",
-            "reasoning",
-            "session id:",
-            "reading prompt",
-            "openai codex",
-            "--------",
-            "recent context:",
-            "current request:",
-            "task",
-            "skill",
-            "bash",
-            "todo",
-            "plan",
-            "cost",
-        )
-        if any(lowered.startswith(prefix) for prefix in prefixes):
-            return True
-        if lowered.startswith("**") and lowered.endswith("**"):
-            return True
-        return False
+    def _extract_errors(self, payload: Dict[str, Any]) -> list[str]:
+        """Extract errors from JSON payload."""
+        errors: list[str] = []
+        if payload.get("type") == "error":
+            detail = payload.get("error")
+            if isinstance(detail, dict):
+                message = detail.get("message") or detail.get("text")
+                if isinstance(message, str):
+                    errors.append(message)
+        return errors
