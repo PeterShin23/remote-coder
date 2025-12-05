@@ -2,17 +2,6 @@
 
 Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine or cloud VM.
 
-## Philosophy
-
-Remote Coder uses **subscription-based coding tools** via their CLIs:
-- Claude Code (Claude Pro/Max subscription)
-- Codex (ChatGPT/Codex subscription)
-- Gemini Code Assist (Google Cloud subscription)
-
-We do NOT use metered API keys like `CLAUDE_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`.
-
-📖 See [docs/usage-philosophy.md](docs/usage-philosophy.md) for the full rationale.
-
 ## Features
 
 - **Slack-first control center** – Operate your daemon entirely through Slack. Send requests, monitor output, and manage sessions without leaving your workspace.
@@ -139,6 +128,7 @@ Remote Coder can run on any cloud VM (AWS EC2, DigitalOcean, Google Cloud, etc.)
 📖 See [docs/cloud-vm-setup.md](docs/cloud-vm-setup.md) for complete setup instructions.
 
 **Quick start:**
+
 1. Launch a VM (Ubuntu 22.04, 2 vCPUs, 4 GB RAM recommended)
 2. Clone repo and install dependencies
 3. Configure environment variables and `config/projects.yaml`

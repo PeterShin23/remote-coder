@@ -61,11 +61,13 @@ See the main README for detailed setup instructions, and `docs/cloud-vm-setup.md
 ## Cost Comparison
 
 ### Subscription Model (Recommended)
+
 - Fixed monthly cost (e.g., $20-50/month per subscription)
 - Unlimited usage within fair use policy
 - Predictable billing
 
 ### Metered API Model (Not Used)
+
 - Pay per token/request
 - Costs can be unpredictable during intensive use
 - Requires careful rate limiting and cost monitoring
@@ -75,11 +77,13 @@ For a coding assistant that runs continuously and handles multiple projects, the
 ## Summary
 
 Remote Coder's philosophy prioritizes:
+
 - **Predictable costs** through subscriptions
 - **Simplified setup** via CLI authentication
 - **Feature access** to the latest model capabilities
 
 This approach makes Remote Coder ideal for:
+
 - Development teams with existing AI coding subscriptions
 - Solo developers who want unlimited coding assistance
 - Cloud VM deployments where multiple projects are managed continuously
