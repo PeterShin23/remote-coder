@@ -131,6 +131,10 @@ def _load_agents(path: Path) -> Dict[str, Agent]:
         if not isinstance(env, dict):
             raise ConfigError(f"env for agent {agent_id} must be a mapping")
 
+        models = cfg.get("models") or {}
+        if not isinstance(models, dict):
+            raise ConfigError(f"models for agent {agent_id} must be a mapping")
+
         agents[agent_id] = Agent(
             id=agent_id,
             type=agent_type,
@@ -138,6 +142,7 @@ def _load_agents(path: Path) -> Dict[str, Agent]:
             working_dir_mode=working_mode,
             fixed_path=fixed_path,
             env={str(k): str(v) for k, v in env.items()},
+            models=models,
         )
     return agents
 

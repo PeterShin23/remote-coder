@@ -50,6 +50,7 @@ class Agent:
     working_dir_mode: WorkingDirMode
     fixed_path: Optional[Path] = None
     env: Dict[str, str] = field(default_factory=dict)
+    models: Dict[str, Any] = field(default_factory=dict)  # {"default": "sonnet", "available": [...]}
 
 
 @dataclass
@@ -67,6 +68,7 @@ class Session:
     active_agent_id: str
     active_agent_type: AgentType
     project_path: Path
+    active_model: Optional[str] = None  # User-facing model name (e.g., "sonnet", "base", "pro")
     conversation_history: List[ConversationMessage] = field(default_factory=list)
     session_context: Dict[str, Any] = field(default_factory=dict)
     status: SessionStatus = SessionStatus.ACTIVE

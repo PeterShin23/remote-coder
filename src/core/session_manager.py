@@ -39,6 +39,7 @@ class SessionManager:
         thread_ts: str,
         agent_id: str,
         agent_type: AgentType,
+        active_model: str | None = None,
     ) -> Session:
         session = Session(
             project_id=project.id,
@@ -47,6 +48,7 @@ class SessionManager:
             active_agent_id=agent_id,
             active_agent_type=agent_type,
             project_path=project.path,
+            active_model=active_model,
         )
         with self._lock:
             self._sessions[session.id] = session
@@ -68,13 +70,21 @@ class SessionManager:
                 raise SessionNotFound("unknown-thread")
         return self.get_session(session_id)
 
-    def set_active_agent(self, session_id: UUID, agent_id: str, agent_type: AgentType) -> None:
+    def set_active_agent(
+        self,
+        session_id: UUID,
+        agent_id: str,
+        agent_type: AgentType,
+        model: str | None = None,
+    ) -> None:
         with self._lock:
             session = self._sessions.get(session_id)
             if not session:
                 raise SessionNotFound(session_id)
             session.active_agent_id = agent_id
             session.active_agent_type = agent_type
+            if model is not None:
+                session.active_model = model
             session.updated_at = datetime.now(timezone.utc)
 
     def append_user_message(self, session_id: UUID, text: str) -> None:

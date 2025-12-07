@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
+from ..core.model_mapping import get_cli_model_name
 from ..core.models import Agent, AgentType, WorkingDirMode
 from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
@@ -30,8 +31,14 @@ class CodexAdapter(AgentAdapter):
         project_path: str,
         session_id: str,
         conversation_history: Sequence[Dict[str, Any]],
+        model: str | None = None,
     ) -> AgentResult:
         command = list(self._agent.command)
+
+        # Inject model flag if specified
+        if model:
+            cli_model = get_cli_model_name("codex", model)
+            command.extend(["-m", cli_model])
         workdir = self._resolve_workdir(project_path)
         env = {**os.environ, **self._agent.env}
 
