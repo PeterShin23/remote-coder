@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
+from ..core.model_mapping import get_cli_model_name
 from ..core.models import Agent, AgentType, WorkingDirMode
 from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
@@ -30,9 +31,17 @@ class GeminiAdapter(AgentAdapter):
         project_path: str,
         session_id: str,
         conversation_history: Sequence[Dict[str, Any]],
+        model: str | None = None,
     ) -> AgentResult:
         # Gemini CLI takes the prompt as a positional argument for one-shot mode
         command = list(self._agent.command)
+
+        # Inject model flag if specified (before the prompt)
+        # Skip -m flag for "auto" to let CLI auto-select
+        if model and model != "auto":
+            cli_model = get_cli_model_name("gemini", model)
+            command.extend(["-m", cli_model])
+
         command.append(task_text)
 
         workdir = self._resolve_workdir(project_path)

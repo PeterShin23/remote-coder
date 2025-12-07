@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
+from ..core.model_mapping import get_cli_model_name
 from ..core.models import Agent, AgentType, WorkingDirMode
 from .base import AgentAdapter, AgentResult, FileEdit, parse_structured_output
 
@@ -30,8 +31,9 @@ class ClaudeAdapter(AgentAdapter):
         project_path: str,
         session_id: str,
         conversation_history: Sequence[Dict[str, Any]],
+        model: str | None = None,
     ) -> AgentResult:
-        command = self._build_command(session_id)
+        command = self._build_command(session_id, model)
         workdir = self._resolve_workdir(project_path)
         env = {**os.environ, **self._agent.env}
 
@@ -103,11 +105,18 @@ class ClaudeAdapter(AgentAdapter):
             structured_output=structured_output,
         )
 
-    def _build_command(self, session_id: str) -> list[str]:
+    def _build_command(self, session_id: str, model: str | None) -> list[str]:
         # Claude's CLI refuses to reuse session IDs between concurrent runs, and
         # our stateless architecture already feeds prior history manually, so we
         # skip passing --session-id entirely.
-        return list(self._agent.command)
+        command = list(self._agent.command)
+
+        # Inject model flag if specified
+        if model:
+            cli_model = get_cli_model_name("claude", model)
+            command.extend(["--model", cli_model])
+
+        return command
 
     def _resolve_workdir(self, project_path: str) -> Path:
         if self._agent.working_dir_mode == WorkingDirMode.PROJECT:

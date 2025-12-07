@@ -113,12 +113,15 @@ class Router:
             return self._session_manager.get_by_thread(channel_id, thread_ts), False
         except SessionNotFound:
             default_agent = self._config.get_agent(project.default_agent_id)
+            # Get default model for the agent
+            default_model = default_agent.models.get("default") if default_agent.models else None
             session = self._session_manager.create_session(
                 project=project,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 agent_id=default_agent.id,
                 agent_type=default_agent.type,
+                active_model=default_model,
             )
             return session, True
 
@@ -132,10 +135,11 @@ class Router:
         session_created: bool,
         ) -> None:
         if session_created:
+            model_display = f" `{session.active_model}`" if session.active_model else ""
             await self._send_message(
                 channel_id,
                 thread_ts,
-                f"Starting session for `{project.id}` with `{session.active_agent_id}`. "
+                f"Starting session for `{project.id}` with `{session.active_agent_id}`{model_display}. "
                 "Send a message with your request, or use `!help` for common commands.",
             )
             try:
@@ -195,16 +199,53 @@ class Router:
                     task_text=task_text,
                     project_path=str(session.project_path),
                     session_id=str(session.id),
-                conversation_history=adapter_history,
-            )
+                    conversation_history=adapter_history,
+                    model=session.active_model,
+                )
         except Exception as exc:  # pragma: no cover - defensive logging
-            LOGGER.exception("Adapter %s failed", agent.id)
-            await self._send_message(
-                channel_id,
-                thread_ts,
-                f"Failed to run `{agent.id}`: {exc}",
-            )
-            return
+            LOGGER.exception("Adapter %s failed with model %s", agent.id, session.active_model)
+
+            # Try fallback to default model if we're not already using it
+            default_model = agent.models.get("default") if agent.models else None
+            if session.active_model and default_model and session.active_model != default_model:
+                LOGGER.info("Retrying %s with default model %s", agent.id, default_model)
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed with model `{session.active_model}`. Retrying with default model `{default_model}`...",
+                )
+                try:
+                    result = await adapter.run(
+                        task_text=task_text,
+                        project_path=str(session.project_path),
+                        session_id=str(session.id),
+                        conversation_history=adapter_history,
+                        model=default_model,
+                    )
+
+                    self._session_manager.set_active_agent(
+                        session.id,
+                        agent.id,
+                        agent.type,
+                        default_model,
+                    )
+                    LOGGER.info("Fallback to default model succeeded for session %s", session.id)
+                except Exception as fallback_exc:
+                    LOGGER.exception("Fallback to default model also failed")
+                    await self._send_message(
+                        channel_id,
+                        thread_ts,
+                        f"Failed to run `{agent.id}` with both `{session.active_model}` and default model `{default_model}`: {fallback_exc}",
+                    )
+                    return
+            else:
+                # No fallback available or already using default
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Failed to run `{agent.id}`: {exc}",
+                )
+                return
         finally:
             # Always clean up the run tracking
             self.active_runs.pop(run_id, None)
@@ -253,7 +294,7 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end", "review", "help", "commands", "purge", "agents"}:
+        if name in {"use", "status", "end", "review", "help", "commands", "purge", "agents", "models"}:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -277,6 +318,8 @@ class Router:
             await self._command_purge(channel_id, thread_ts)
         elif command.name == "agents":
             await self._command_agents(channel_id, thread_ts)
+        elif command.name == "models":
+            await self._command_models(channel_id, thread_ts)
         elif command.name in {"help", "commands"}:
             await self._command_help(channel_id, thread_ts)
         else:
@@ -291,19 +334,37 @@ class Router:
     ) -> None:
         LOGGER.info("Executing !use command in channel %s, thread %s", channel, thread_ts)
         if not command.args:
-            await self._send_message(channel, thread_ts, "Usage: use <agent-id>")
+            await self._send_message(channel, thread_ts, "Usage: `!use <agent> [model]`")
             return
 
-        agent_id = command.args[0]
+        agent_id = command.args[0].lower()
+        model = command.args[1].lower() if len(command.args) > 1 else None
+
         try:
             agent = self._config.get_agent(agent_id)
         except AgentNotFound:
             await self._send_message(channel, thread_ts, f"Unknown agent `{agent_id}`")
             return
 
-        self._session_manager.set_active_agent(session.id, agent_id, agent.type)
-        LOGGER.info("Switched session %s to agent %s", session.id, agent_id)
-        await self._send_message(channel, thread_ts, f"Switched to `{agent_id}`")
+        if model:
+            available_models = agent.models.get("available", [])
+            if model not in available_models:
+                await self._send_message(
+                    channel,
+                    thread_ts,
+                    f"Unknown model `{model}` for agent `{agent_id}`. Available: {', '.join(available_models)}",
+                )
+                return
+
+        # If no model specified, use default
+        if not model and agent.models:
+            model = agent.models.get("default")
+
+        self._session_manager.set_active_agent(session.id, agent_id, agent.type, model)
+        LOGGER.info("Switched session %s to agent %s model %s", session.id, agent_id, model)
+
+        model_display = f" `{model}`" if model else ""
+        await self._send_message(channel, thread_ts, f"Switched to `{agent_id}`{model_display}")
 
     async def _command_end_session(self, session: Session, channel: str, thread_ts: str) -> None:
         LOGGER.info("Executing !end command in channel %s, thread %s", channel, thread_ts)
@@ -329,12 +390,13 @@ class Router:
     async def _command_help(self, channel: str, thread_ts: str) -> None:
         lines = [
             "Available commands:",
-            "- `!use <agent>` – Use configured coding agent. `claude` | `codex` | `gemini`",
+            "- `!use <agent> [model]` – Switch to a different agent and optionally specify model.",
             "- `!status` – Show session, active agent, and history count.",
             "- `!review` – List unresolved GitHub review comments for this session's PR.",
             "- `!end` – End the session (start a new Slack thread to reset).",
             "- `!purge` – Cancel all running agent tasks and clear all sessions.",
             "- `!agents` – List all configured coding agents.",
+            "- `!models` – List all available models for each agent.",
             "- `!help` – Show this command list.",
             "",
             "Send any other message to run the current agent once with that request.",
@@ -344,9 +406,26 @@ class Router:
     async def _command_agents(self, channel: str, thread_ts: str) -> None:
         """List all configured agents."""
         agent_lines = ["Available agents:"]
-        for agent_id, agent in self._config.agents.items():
-            agent_lines.append(f"- `{agent_id}` ({agent.type.value})")
+        for _, agent in self._config.agents.items():
+            agent_lines.append(f"- `{agent.type.value}`")
         await self._send_message(channel, thread_ts, "\n".join(agent_lines))
+
+    async def _command_models(self, channel: str, thread_ts: str) -> None:
+        """List all available models for all agents."""
+        lines = ["Available models by agent:"]
+        for agent_id, agent in self._config.agents.items():
+            if agent.models:
+                default = agent.models.get("default", "")
+                available = agent.models.get("available", [])
+                if available:
+                    models_str = ", ".join(f"`{m}`" for m in available)
+                    default_marker = f" (default: `{default}`)" if default else ""
+                    lines.append(f"- `{agent_id}`: {models_str}{default_marker}")
+                else:
+                    lines.append(f"- `{agent_id}`: No models configured")
+            else:
+                lines.append(f"- `{agent_id}`: No models configured")
+        await self._send_message(channel, thread_ts, "\n".join(lines))
 
     async def _command_purge(self, channel: str, thread_ts: str) -> None:
         """Cancel all active agent runs and clear all sessions."""
