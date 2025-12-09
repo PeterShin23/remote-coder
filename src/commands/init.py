@@ -482,11 +482,8 @@ def run_init_command(args) -> int:
     Returns:
         Exit status code (0 for success, 1 for error)
     """
-    # Resolve target directory
-    if args.config_dir:
-        target_dir = Path(args.config_dir).expanduser().resolve()
-    else:
-        target_dir = DEFAULT_CONFIG_DIR
+    # Always use ~/.remote-coder
+    target_dir = DEFAULT_CONFIG_DIR
 
     # Check if directory exists and handle overwrite
     if not check_existing_config(target_dir):
