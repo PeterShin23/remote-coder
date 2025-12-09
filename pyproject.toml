@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "remote-coder"
-version = "0.1.0"
+version = "0.0.1-alpha.1"
 description = "Python daemon for controlling local coding agents via Slack."
 authors = [{ name = "Remote Coder" }]
 readme = "README.md"
@@ -24,4 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-remote-coder = "src.main:run"
+remote-coder = "src.main:cli"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
