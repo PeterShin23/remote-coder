@@ -22,26 +22,61 @@ def cli(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(
         prog="remote-coder",
-        description="Run the Remote Coder Slack daemon.",
+        description="Remote Coder - Slack-first daemon for controlling local coding agents",
     )
-    parser.add_argument(
-        "--config-dir",
-        type=str,
-        help="Directory containing .env, projects.yaml, and agents.yaml (default: ~/.remote-coder)",
+
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Init subcommand
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize Remote Coder configuration interactively",
     )
+
+    # Config subcommand with nested subparsers
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Manage configuration",
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command",
+        help="Configuration options"
+    )
+
+    # Config agents subcommand
+    agents_parser = config_subparsers.add_parser(
+        "agents",
+        help="Manage enabled agents",
+    )
+
     args = parser.parse_args(argv)
 
-    config_dir = args.config_dir or os.getenv("REMOTE_CODER_CONFIG_DIR")
+    # Route to appropriate handler
+    if args.command == "init":
+        # Import here to avoid circular dependencies
+        from .commands import run_init_command
 
-    try:
-        asyncio.run(_run_async(config_dir))
-    except ConfigError as exc:
-        LOGGER.error("Configuration error: %s", exc)
-        return 1
-    except KeyboardInterrupt:
-        LOGGER.info("Interrupted by user")
-        return 130
-    return 0
+        return run_init_command(args)
+    elif args.command == "config":
+        if args.config_command == "agents":
+            from .commands import run_config_agents_command
+
+            return run_config_agents_command(args)
+        else:
+            config_parser.print_help()
+            return 1
+    else:
+        # Default behavior: start daemon
+        try:
+            asyncio.run(_run_async(None))
+        except ConfigError as exc:
+            LOGGER.error("Configuration error: %s", exc)
+            return 1
+        except KeyboardInterrupt:
+            LOGGER.info("Interrupted by user")
+            return 130
+        return 0
 
 
 def run() -> None:
