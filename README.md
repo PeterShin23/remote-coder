@@ -84,7 +84,7 @@ Then edit `.env` and fill in:
 - `SLACK_APP_TOKEN`
 - `SLACK_BOT_TOKEN`
 - `SLACK_ALLOWED_USER_IDS` (comma-separated list of Slack user IDs allowed to use the bot)
-- `GITHUB_TOKEN` (optional, for PR automation)
+- `GITHUB_TOKEN`
 - `REMOTE_CODER_AGENTS` (optional, comma-separated list to limit which agents load)
 
 > When you want to add/remove projects later, open `projects.yaml` in your editor, edit it directly.
@@ -150,7 +150,7 @@ Set this in your `.env` file or export it in your shell before running `remote-c
    }
    ```
 
-3. Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions). 
+3. Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions).
 4. Under **Event Subscriptions**, turn it on, choose Socket Mode delivery, and subscribe to:
    - `app_mention` (always required so mentions work)
    - `message.channels` if you want to react to all channel traffic
