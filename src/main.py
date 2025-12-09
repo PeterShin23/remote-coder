@@ -22,26 +22,49 @@ def cli(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(
         prog="remote-coder",
-        description="Run the Remote Coder Slack daemon.",
+        description="Remote Coder - Slack-first daemon for controlling local coding agents",
     )
     parser.add_argument(
         "--config-dir",
         type=str,
         help="Directory containing .env, projects.yaml, and agents.yaml (default: ~/.remote-coder)",
     )
+
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Init subcommand
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize Remote Coder configuration interactively",
+    )
+    init_parser.add_argument(
+        "--config-dir",
+        type=str,
+        help="Target config directory (default: ~/.remote-coder)",
+    )
+
     args = parser.parse_args(argv)
 
-    config_dir = args.config_dir or os.getenv("REMOTE_CODER_CONFIG_DIR")
+    # Route to appropriate handler
+    if args.command == "init":
+        # Import here to avoid circular dependencies
+        from .commands import run_init_command
 
-    try:
-        asyncio.run(_run_async(config_dir))
-    except ConfigError as exc:
-        LOGGER.error("Configuration error: %s", exc)
-        return 1
-    except KeyboardInterrupt:
-        LOGGER.info("Interrupted by user")
-        return 130
-    return 0
+        return run_init_command(args)
+    else:
+        # Default behavior: start daemon (backward compatible)
+        config_dir = args.config_dir or os.getenv("REMOTE_CODER_CONFIG_DIR")
+
+        try:
+            asyncio.run(_run_async(config_dir))
+        except ConfigError as exc:
+            LOGGER.error("Configuration error: %s", exc)
+            return 1
+        except KeyboardInterrupt:
+            LOGGER.info("Interrupted by user")
+            return 130
+        return 0
 
 
 def run() -> None:

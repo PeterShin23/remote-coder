@@ -55,47 +55,47 @@ uv tool install git+https://github.com/PeterShin23/remote-coder --upgrade
 
 This installs a global `remote-coder` command. Want to contribute or modify the code? Clone the repo and run `uv pip install -e .` from the project root for an editable install.
 
-### 2. Create a config directory
+### 2. Initialize configuration
 
-By default, Remote Coder looks for its config in `~/.remote-coder`:
+Run the interactive setup wizard to create your configuration:
+
+```bash
+remote-coder init
+```
+
+This will guide you through:
+- Setting up Slack tokens and allowed users
+- Configuring GitHub integration (optional)
+- Adding your first project
+
+Configuration is saved to `~/.remote-coder` by default.
+
+<details>
+<summary>Alternative: Manual configuration (click to expand)</summary>
+
+If you prefer to set up config files manually:
 
 ```bash
 mkdir -p ~/.remote-coder
 cd ~/.remote-coder
 ```
 
-### 3. Add your `.env` and YAML configs
-
-If you have the repo cloned locally, copy the example files (or download them directly from the [latest release](https://github.com/PeterShin23/remote-coder/releases)):
-
+Copy example files from the repo or download them:
 ```bash
-# from inside the repo
+# If you have the repo cloned:
 ./scripts/copy_configs.sh
-```
 
-This copies your current `.env`, `config/projects.yaml`, and `config/agents.yaml` into `~/.remote-coder`, falling back to the example files if needed. After editing the files, rerun the script and use `!reload-projects` in Slack to apply changes without restarting. You can also copy files manually if you prefer:
-
-```bash
+# Or manually copy:
 cp /path/to/remote-coder/.env.example .env
 cp /path/to/remote-coder/config/projects.yaml.example projects.yaml
 cp /path/to/remote-coder/config/agents.yaml agents.yaml
 ```
 
-Then edit `.env` and fill in:
+Then edit `.env` and fill in your tokens. See the [Slack App Setup](#slack-app-setup) and [GitHub PAT Setup](#github-pat-setup) sections below for details.
 
-- `SLACK_APP_TOKEN`
-- `SLACK_BOT_TOKEN`
-- `SLACK_ALLOWED_USER_IDS` (comma-separated list of Slack user IDs allowed to use the bot)
-- `GITHUB_TOKEN`
-- `REMOTE_CODER_AGENTS` (optional, comma-separated list to limit which agents load)
+</details>
 
-> When you want to add/remove projects later, open `projects.yaml` in your editor, edit it directly.
-
-Remote Coder loads variables from `.env` and the current shell. Shell environment variables take precedence.
-
-### 4. Start the daemon
-
-From your config directory:
+### 3. Start the daemon
 
 ```bash
 remote-coder
