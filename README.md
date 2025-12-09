@@ -64,6 +64,7 @@ remote-coder init
 ```
 
 This will guide you through:
+
 - Setting up Slack tokens and allowed users
 - Configuring GitHub integration (optional)
 - Adding your first project
@@ -81,6 +82,7 @@ cd ~/.remote-coder
 ```
 
 Copy example files from the repo or download them:
+
 ```bash
 # If you have the repo cloned:
 ./scripts/copy_configs.sh
@@ -94,6 +96,10 @@ cp /path/to/remote-coder/config/agents.yaml agents.yaml
 Then edit `.env` and fill in your tokens. See the [Slack App Setup](#slack-app-setup) and [GitHub PAT Setup](#github-pat-setup) sections below for details.
 
 </details>
+
+### 2.1 Make sure all configured coding agent clis are AUTHENTICATED on your computer.
+
+Please :)
 
 ### 3. Start the daemon
 
