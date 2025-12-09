@@ -5,6 +5,8 @@
 
 Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine.
 
+[Submit Feedback](https://forms.gle/zRCYWnJoq7m6PiyH8)
+
 ## Features
 
 - **Slack-first control center** – Operate your daemon entirely through Slack. Send requests, monitor output, and manage sessions without leaving your workspace.
