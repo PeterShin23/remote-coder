@@ -1,7 +1,7 @@
 """Allow `python -m src` execution."""
 
-from .main import run
+from .main import cli
 
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(cli())

@@ -1,6 +1,9 @@
 # Remote Coder
 
-Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine or cloud VM.
+> **Status: Public Alpha (`v0.0.1-alpha.1`)**  
+> This is an early alpha release. APIs, config formats, and behavior may change between versions. Expect breaking changes and rough edges.
+
+Remote Coder is a Slack-first daemon that lets you control local coding agents, stream their output into Slack threads, and eventually sync progress back to GitHub pull requests. The project runs entirely on your own machine.
 
 ## Features
 
@@ -11,28 +14,102 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 - **Multi-agent support** – Switch between coding agents (Claude, Codex, Gemini) mid-session with a single command. No need to restart.
 - **Zero API key overhead** – Uses local coding agent CLI installations. No additional LLM API keys required beyond what your CLIs already use.
 
-## Getting Started
+## 🚀 Quickstart (Alpha)
 
-> Prerequisites: Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/), Slack workspace admin access (to create an app), and a GitHub account.
+Remote Coder is designed to run on your own machine, with your own tokens, using a simple config directory and `.env` file.
 
-1. **Clone & enter the repo**
+### 1. Install the CLI (using uv)
 
-   ```bash
-   git clone https://github.com/PeterShin23/remote-coder.git
-   cd remote-coder
-   ```
+Make sure you have [uv](https://github.com/astral-sh/uv) and Python 3.11+ installed, then:
 
-2. **Copy env + config templates**
+```bash
+uv tool install remote-coder
+```
 
-   ```bash
-   cp .env.example .env
-   cp config/projects.yaml.example config/projects.yaml  # create if missing
-   ```
+This installs a global `remote-coder` command. Prefer working from source instead? Clone the repo and run `uv pip install -e .` from the project root; the CLI entrypoint is still `remote-coder`.
 
-3. **Create a Slack App**
+### 2. Create a config directory
 
-   - Visit [api.slack.com/apps](https://api.slack.com/apps), create an app, and enable **Socket Mode**.
-   - Example Manifest
+By default, Remote Coder looks for its config in `~/.remote-coder`:
+
+```bash
+mkdir -p ~/.remote-coder
+cd ~/.remote-coder
+```
+
+### 3. Add your `.env` and YAML configs
+
+If you have the repo cloned locally, copy the example files (or download them directly from the [latest release](https://github.com/PeterShin23/remote-coder/releases)):
+
+```bash
+# from inside the repo
+./scripts/copy_configs.sh
+```
+
+This copies your current `.env`, `config/projects.yaml`, and `config/agents.yaml` into `~/.remote-coder`, falling back to the example files if needed. You can also copy files manually if you prefer:
+
+```bash
+cp /path/to/remote-coder/.env.example .env
+cp /path/to/remote-coder/config/projects.yaml.example projects.yaml
+cp /path/to/remote-coder/config/agents.yaml agents.yaml
+```
+
+Then edit `.env` and fill in:
+
+- `SLACK_APP_TOKEN`
+- `SLACK_BOT_TOKEN`
+- `SLACK_ALLOWED_USER_IDS` (comma-separated list of Slack user IDs allowed to use the bot)
+- `GITHUB_TOKEN` (optional, for PR automation)
+- `REMOTE_CODER_AGENTS` (optional, comma-separated list to limit which agents load)
+
+> Need help creating the Slack tokens? See **Slack App Setup** below.  
+> When you want to add/remove projects later, open `projects.yaml` in your editor and edit it directly—there’s no extra CLI ceremony.
+
+Remote Coder loads variables from `.env` and the current shell. Shell environment variables take precedence.
+
+### 4. Start the daemon
+
+From your config directory:
+
+```bash
+remote-coder
+# or keep your Mac awake while it runs:
+caffeinate -i remote-coder
+```
+
+You should see logs indicating that `.env` and the YAML files were loaded, Slack Socket Mode connected, and the daemon is listening for events. Built-in Slack thread commands include `!use`, `!status`, `!review`, `!setup`, `!end`, `!purge`, and `!help`.
+
+If you ever need to run against a different folder (for example, you keep configs inside your repo), either pass `--config-dir /path/to/config` or set an environment variable:
+
+```bash
+export REMOTE_CODER_CONFIG_DIR="/Users/you/projects/remote-coder/config"
+remote-coder
+```
+
+### Selecting which agents to enable
+
+All agents are defined in `agents.yaml`. By default, **all** agents in that file are enabled.
+
+You can limit which agents Remote Coder uses by setting the `REMOTE_CODER_AGENTS` environment variable (comma-separated list of agent names):
+
+```env
+REMOTE_CODER_AGENTS=claude,codex
+```
+
+Rules:
+
+- If `REMOTE_CODER_AGENTS` is unset or empty, all agents from `agents.yaml` are enabled.
+- If it is set, only the listed agents are loaded.
+- If any name in `REMOTE_CODER_AGENTS` does not exist in `agents.yaml`, Remote Coder fails fast on startup with a clear error message.
+
+Set this in your `.env` file or export it in your shell before running `remote-coder`.
+
+## Slack App Setup
+
+> Prerequisites: Slack workspace admin access (to create and install apps).
+
+1. Visit [api.slack.com/apps](https://api.slack.com/apps), create an app, and enable **Socket Mode**.
+2. Example manifest:
 
    ```json
    {
@@ -48,97 +125,71 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
    }
    ```
 
-   - Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions).
-   - Under **Event Subscriptions**, turn it on, choose Socket Mode delivery, and subscribe to:
-     - `app_mention` (always required so mentions work).
-     - `message.channels` if you want to react to all channel traffic.
-     - Reinstall the app after adding scopes/events so Slack issues a token that matches the new permissions.
-   - Install (or reinstall) the app to your workspace and copy:
-     - **Bot User OAuth Token** (`SLACK_BOT_TOKEN`, looks like `xoxb-...`)
-     - **App-Level Token** (`SLACK_APP_TOKEN`, looks like `xapp-1-...`)
-   - Set `SLACK_ALLOWED_USER_ID` to your Slack user ID (find it in your Slack profile menu).
+3. Add scopes your bot needs (minimum: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`; add `message.channels` if you want to capture every message in a channel without @-mentions). 
+4. Under **Event Subscriptions**, turn it on, choose Socket Mode delivery, and subscribe to:
+   - `app_mention` (always required so mentions work)
+   - `message.channels` if you want to react to all channel traffic
+   - Reinstall the app after adding scopes/events so Slack issues a token that matches the new permissions.
+5. Install (or reinstall) the app to your workspace and copy:
+   - **Bot User OAuth Token** (`SLACK_BOT_TOKEN`, looks like `xoxb-...`)
+   - **App-Level Token** (`SLACK_APP_TOKEN`, looks like `xapp-1-...`)
+6. Set `SLACK_ALLOWED_USER_IDS` (comma-separated) to the Slack user IDs that can talk to the bot. You can find your user ID in your Slack profile.
 
-4. **Create a GitHub token (optional for PR features)**
+## GitHub token (optional for PR features)
 
-   - Future phases will let the bot open/refresh pull requests and sync comments. Those calls require a GitHub token with access to the repositories you map in `config/projects.yaml`.
-   - Head to [github.com/settings/tokens](https://github.com/settings/tokens) and create either:
-     - A **fine-grained** token scoped to the specific org/repo with `Contents: Read/Write` and `Pull requests: Read/Write`, or
-     - A **classic** token with the `repo` scope (which already includes PR permissions).
-   - Copy the token value into `.env` as `GITHUB_TOKEN=ghp_...`.
-   - Keep the token local. Remote Coder only uses it when a workflow explicitly needs GitHub API access (e.g., syncing edits to a PR).
+Future phases let the bot open/refresh pull requests and sync comments. Those calls require a GitHub token with access to the repositories you map in `projects.yaml`.
 
-5. **Install dependencies with uv**
+1. Head to [github.com/settings/tokens](https://github.com/settings/tokens) and create either:
+   - A **fine-grained** token scoped to the specific org/repo with `Contents: Read/Write` and `Pull requests: Read/Write`, or
+   - A **classic** token with the `repo` scope (which already includes PR permissions).
+2. Copy the token value into your `.env` as `GITHUB_TOKEN=ghp_...`.
+3. Keep the token local. Remote Coder only uses it when a workflow explicitly needs GitHub API access (e.g., syncing edits to a PR).
 
-   ```bash
-   uv pip install -e .
-   ```
+## Project & agent configuration
 
-   Note: May ask to create virtual environment first
+`projects.yaml` maps Slack channels to local git repositories. Each entry only needs a relative path (relative to `base_dir`), a default agent, and optional GitHub metadata:
 
-   ```bash
-   uv venv
-   ```
+```yaml
+base_dir: /home/you/code
 
-6. **Configure your projects**
+projects:
+  remote-coder:
+    path: remote-coder
+    default_agent: codex
+    github:
+      owner: your-github-handle
+      repo: remote-coder
+      default_base_branch: main
+```
 
-   - Edit `config/projects.yaml` to map Slack channels to local paths/agents (the `default_agent` must match one of your agents).
-     ```yaml
-     projects:
-       remote-coder:
-         path: remote-coder
-         default_agent: codex
-         github:
-           owner: your-github-handle
-           repo: remote-coder
-           default_base_branch: main
-     ```
-   - Edit `config/agents.yaml` to list the one-shot agent commands. Each entry looks like:
-     ```yaml
-     agents:
-       claude:
-         type: claude # supported: claude, codex, gemini
-         command: ["claude", "--print", "--permission-mode", "acceptEdits", ...]
-         working_dir_mode: project
-         env:
-           CLAUDE_API_KEY: "..."
-     ```
-     Commands run once per Slack message, so make sure the CLI you specify supports non-interactive `--print` / exec style usage.
+`agents.yaml` lists the CLI commands Remote Coder can launch:
 
-7. **Run the daemon**
-   ```bash
-   caffeinate -i uv run python -m src
-   ```
-   You should see log lines confirming the Slack Socket Mode connection. Mention or DM the bot (from the allowed user) to verify you see logging output.
-   - Built-in Slack thread commands (either `!command` or `@remote-coder command`):
-     - `!use <agent-id>` / `@remote-coder use <agent-id>` – use a different coding agent in the current session.
-     - `!status` / `@remote-coder status` – display the active agent and message history count.
-     - `!review` / `@remote-coder review pr` – list unresolved GitHub review comments for the session's pull request and immediately run the active agent to address them (requires GitHub token + project metadata).
-     - `!end` / `@remote-coder end` – end the current session (start a new Slack thread to reset state).
-     - `!purge` / `@remote-coder purge` – cancel all running agent tasks and clear all sessions (useful for resetting daemon state without restarting).
-     - `!help` / `@remote-coder help` – show the available commands.
-   - **Automatic PR workflow**:
-     - When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch.
-     - A link to the PR is posted in the Slack thread after every successful push so you can review progress immediately.
-     - Make sure each project in `config/projects.yaml` points to a git repository with a clean working tree and a reachable `origin` remote, and that `config/projects.yaml` includes the repository’s GitHub metadata (`owner`, `repo`, and `default_base_branch`).
+```yaml
+agents:
+  claude:
+    type: claude
+    command: ["claude", "--print", "--permission-mode", "acceptEdits", ...]
+    working_dir_mode: project
+    models:
+      default: sonnet
+      available: [opus, sonnet, haiku]
+```
 
-## Running on Cloud VM
+Commands run once per Slack message, so make sure the CLI you specify supports non-interactive usage. When you want to add a new project or tweak an agent, edit the YAML directly and restart `remote-coder`.
 
-Remote Coder can run on any cloud VM (AWS EC2, DigitalOcean, Google Cloud, etc.).
+**Make sure you invite the bot to the channel with your project so that it can start listening for messages in that channel**
 
-📖 See [docs/cloud-vm-setup.md](docs/cloud-vm-setup.md) for complete setup instructions.
+## Slack commands & PR workflow
 
-**Quick start:**
+- `!use <agent-id>` – switch to a different coding agent for this session.
+- `!status` – show the current agent, active model, and history count.
+- `!review` – list unresolved GitHub review comments for the session's PR and immediately run the active agent to address them.
+- `!setup` – health-check your CLI authentications (inside the container or on bare metal).
+- `!end` – end the current session (start a new Slack thread to reset state).
+- `!purge` – cancel all running agent tasks and clear all sessions (useful for resetting daemon state without restarting).
+- `!help` – show the available commands.
 
-1. Launch a VM (Ubuntu 22.04, 2 vCPUs, 4 GB RAM recommended)
-2. Clone repo and install dependencies
-3. Configure environment variables and `config/projects.yaml`
-4. Install and authenticate agent CLIs (claude, codex, gemini)
-5. Run as daemon: `uv run python -m src` (or use systemd for production)
-
-## Documentation
-
-- [Usage Philosophy](docs/usage-philosophy.md) - Why we use subscription CLIs
-- [Cloud VM Setup Guide](docs/cloud-vm-setup.md) - Deploying to AWS, DigitalOcean, etc.
+When an agent edits files in a session, Remote Coder creates (or reuses) a branch named `remote-coder-<session-id>`, commits the changes, pushes to `origin`, and opens/updates a pull request against the project’s default base branch. A link to the PR is posted in the Slack thread after every successful push so you can review progress immediately. Make sure each project points to a git repository with a clean working tree and a reachable `origin`, and that `projects.yaml` includes the repository’s GitHub metadata.
 
 ## Useful Links
 

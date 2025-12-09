@@ -2,31 +2,70 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
 import signal
+from pathlib import Path
+from typing import Sequence
 
-from dotenv import load_dotenv
-
-from .core import Config, Router, SessionManager, load_config
-from .github import GitHubManager
 from .chat_adapters.slack_adapter import SlackAdapter
+from .core import Config, ConfigError, Router, SessionManager, load_config
+from .core.config import resolve_config_dir
+from .github import GitHubManager
 
 LOGGER = logging.getLogger(__name__)
 
 
-async def _run_async() -> None:
-    load_dotenv()
-    log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+def cli(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point."""
+    parser = argparse.ArgumentParser(
+        prog="remote-coder",
+        description="Run the Remote Coder Slack daemon.",
+    )
+    parser.add_argument(
+        "--config-dir",
+        type=str,
+        help="Directory containing .env, projects.yaml, and agents.yaml (default: ~/.remote-coder)",
+    )
+    args = parser.parse_args(argv)
+
+    config_dir = args.config_dir or os.getenv("REMOTE_CODER_CONFIG_DIR")
+
+    try:
+        asyncio.run(_run_async(config_dir))
+    except ConfigError as exc:
+        LOGGER.error("Configuration error: %s", exc)
+        return 1
+    except KeyboardInterrupt:
+        LOGGER.info("Interrupted by user")
+        return 130
+    return 0
+
+
+def run() -> None:
+    """Backwards compatibility shim for older entrypoints."""
+    cli()
+
+
+async def _run_async(config_dir: str | Path | None) -> None:
     logging.basicConfig(
-        level=log_level,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    config: Config = load_config()
+    resolved_dir = resolve_config_dir(config_dir)
+    LOGGER.info("Using config directory: %s", resolved_dir)
+
+    config: Config = load_config(resolved_dir)
+
+    log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    logging.getLogger().setLevel(log_level)
+
     LOGGER.info(
-        "Loaded %s projects and %s agents",
+        "Loaded %s project(s) and %s agent(s)",
         len(config.projects),
         len(config.agents),
     )
@@ -65,9 +104,5 @@ async def _run_async() -> None:
     LOGGER.info("Shutdown complete")
 
 
-def run() -> None:
-    asyncio.run(_run_async())
-
-
 if __name__ == "__main__":
-    run()
+    raise SystemExit(cli())
