@@ -40,6 +40,11 @@ class GitHubManager:
         self._token = token
         self._client = Github(token) if token else None
 
+    def update_token(self, token: Optional[str]) -> None:
+        """Update the GitHub token and underlying client."""
+        self._token = token
+        self._client = Github(token) if token else None
+
     def is_configured(self) -> bool:
         return self._client is not None
 

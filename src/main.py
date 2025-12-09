@@ -72,7 +72,7 @@ async def _run_async(config_dir: str | Path | None) -> None:
 
     session_manager = SessionManager()
     github_manager = GitHubManager(config.github_token)
-    router = Router(session_manager, config, github_manager)
+    router = Router(session_manager, config, github_manager, resolved_dir)
     slack_adapter = SlackAdapter(
         bot_token=config.slack_bot_token,
         app_token=config.slack_app_token,

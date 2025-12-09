@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Config loader that reads `.env`, `projects.yaml`, and `agents.yaml`, plus `REMOTE_CODER_AGENTS` filtering.
 - Public alpha quickstart docs, Slack/GitHub setup guidance, and agent selection notes.
 - Community docs: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`.
+- `!reload-projects` Slack command to pick up `.env` and `.yaml` changes without restarting.
 
 ### Changed
 

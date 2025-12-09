@@ -51,6 +51,10 @@ class SlackAdapter(IChatAdapter):
             self._stop_event.set()
         await self._client.close()
 
+    def update_allowed_users(self, allowed_user_ids: list[str]) -> None:
+        """Update the list of Slack user IDs allowed to interact with the bot."""
+        self._allowed_user_ids = allowed_user_ids
+
     async def _handle_socket_request(
         self,
         client: SocketModeClient,

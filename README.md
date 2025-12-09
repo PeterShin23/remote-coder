@@ -23,10 +23,10 @@ Remote Coder is designed to run on your own machine, with your own tokens, using
 Make sure you have [uv](https://github.com/astral-sh/uv) and Python 3.11+ installed, then:
 
 ```bash
-uv tool install remote-coder
+uv tool install git+https://github.com/PeterShin23/remote-coder --upgrade
 ```
 
-This installs a global `remote-coder` command. Prefer working from source instead? Clone the repo and run `uv pip install -e .` from the project root; the CLI entrypoint is still `remote-coder`.
+This installs a global `remote-coder` command. Want to contribute or modify the code? Clone the repo and run `uv pip install -e .` from the project root for an editable install.
 
 ### 2. Create a config directory
 
@@ -46,7 +46,7 @@ If you have the repo cloned locally, copy the example files (or download them di
 ./scripts/copy_configs.sh
 ```
 
-This copies your current `.env`, `config/projects.yaml`, and `config/agents.yaml` into `~/.remote-coder`, falling back to the example files if needed. You can also copy files manually if you prefer:
+This copies your current `.env`, `config/projects.yaml`, and `config/agents.yaml` into `~/.remote-coder`, falling back to the example files if needed. After editing the files, rerun the script and use `!reload-projects` in Slack to apply changes without restarting. You can also copy files manually if you prefer:
 
 ```bash
 cp /path/to/remote-coder/.env.example .env
@@ -77,7 +77,7 @@ remote-coder
 caffeinate -i remote-coder
 ```
 
-You should see logs indicating that `.env` and the YAML files were loaded, Slack Socket Mode connected, and the daemon is listening for events. Built-in Slack thread commands include `!use`, `!status`, `!review`, `!setup`, `!end`, `!purge`, and `!help`.
+You should see logs indicating that `.env` and the YAML files were loaded, Slack Socket Mode connected, and the daemon is listening for events. Built-in Slack thread commands include `!use`, `!status`, `!review`, `!reload-projects`, `!setup`, `!end`, `!purge`, and `!help`.
 
 If you ever need to run against a different folder (for example, you keep configs inside your repo), either pass `--config-dir /path/to/config` or set an environment variable:
 
@@ -184,6 +184,7 @@ Commands run once per Slack message, so make sure the CLI you specify supports n
 - `!use <agent-id>` – switch to a different coding agent for this session.
 - `!status` – show the current agent, active model, and history count.
 - `!review` – list unresolved GitHub review comments for the session's PR and immediately run the active agent to address them.
+- `!reload-projects` – reload `.env`, `projects.yaml`, and `agents.yaml` after running `./scripts/copy_configs.sh`.
 - `!setup` – health-check your CLI authentications (inside the container or on bare metal).
 - `!end` – end the current session (start a new Slack thread to reset state).
 - `!purge` – cancel all running agent tasks and clear all sessions (useful for resetting daemon state without restarting).

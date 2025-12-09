@@ -15,8 +15,8 @@ from ..chat_adapters.i_chat_adapter import IChatAdapter
 from ..github import GitHubManager
 from ..github.client import EnsurePROptions, PRComment
 from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
-from .config import Config
-from .errors import AgentNotFound, GitHubError, ProjectNotFound, SessionNotFound
+from .config import Config, load_config
+from .errors import AgentNotFound, ConfigError, GitHubError, ProjectNotFound, SessionNotFound
 from .models import Agent, AgentType, Project, Session, SessionStatus
 from .session_manager import SessionManager
 
@@ -55,10 +55,12 @@ class Router:
         session_manager: SessionManager,
         config: Config,
         github_manager: GitHubManager,
+        config_root: Path,
     ) -> None:
         self._session_manager = session_manager
         self._config = config
         self._github_manager = github_manager
+        self._config_root = Path(config_root)
         self._chat_adapter: Optional[IChatAdapter] = None
         self._adapter_cache: Dict[str, AgentAdapter] = {}
         self._session_locks: Dict[str, asyncio.Lock] = {}
@@ -294,7 +296,18 @@ class Router:
         if not parts:
             return None
         name = parts[0].lower()
-        if name in {"use", "status", "end", "review", "help", "commands", "purge", "agents", "models"}:
+        if name in {
+            "use",
+            "status",
+            "end",
+            "review",
+            "help",
+            "commands",
+            "purge",
+            "agents",
+            "models",
+            "reload-projects",
+        }:
             return ParsedCommand(name=name, args=parts[1:])
         return None
 
@@ -320,6 +333,8 @@ class Router:
             await self._command_agents(channel_id, thread_ts)
         elif command.name == "models":
             await self._command_models(channel_id, thread_ts)
+        elif command.name == "reload-projects":
+            await self._command_reload_projects(channel_id, thread_ts)
         elif command.name in {"help", "commands"}:
             await self._command_help(channel_id, thread_ts)
         else:
@@ -426,6 +441,40 @@ class Router:
             else:
                 lines.append(f"- `{agent_id}`: No models configured")
         await self._send_message(channel, thread_ts, "\n".join(lines))
+
+    async def _command_reload_projects(self, channel: str, thread_ts: str) -> None:
+        """Reload configuration files without restarting the daemon."""
+        LOGGER.info("Executing !reload-projects command")
+        try:
+            new_config = load_config(self._config_root)
+        except ConfigError as exc:
+            await self._send_message(channel, thread_ts, f"Failed to reload config: {exc}")
+            return
+
+        old_config = self._config
+        self._config = new_config
+        self._github_manager.update_token(new_config.github_token)
+        self._adapter_cache.clear()
+
+        if self._chat_adapter and hasattr(self._chat_adapter, "update_allowed_users"):
+            try:
+                self._chat_adapter.update_allowed_users(new_config.slack_allowed_user_ids)
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.warning("Failed to update Slack allowed users during config reload", exc_info=True)
+
+        slack_restart_note = ""
+        if (
+            old_config.slack_bot_token != new_config.slack_bot_token
+            or old_config.slack_app_token != new_config.slack_app_token
+        ):
+            slack_restart_note = " (Slack tokens changed; restart the daemon for changes to take effect.)"
+
+        await self._send_message(
+            channel,
+            thread_ts,
+            f"Reloaded configuration: {len(new_config.projects)} project(s), {len(new_config.agents)} agent(s)."
+            f"{slack_restart_note}",
+        )
 
     async def _command_purge(self, channel: str, thread_ts: str) -> None:
         """Cancel all active agent runs and clear all sessions."""
