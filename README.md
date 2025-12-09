@@ -18,9 +18,34 @@ Remote Coder is a Slack-first daemon that lets you control local coding agents, 
 
 Remote Coder is designed to run on your own machine, with your own tokens, using a simple config directory and `.env` file.
 
-### 1. Install the CLI (using uv)
+### Prerequisites
 
-Make sure you have [uv](https://github.com/astral-sh/uv) and Python 3.11+ installed, then:
+Before installing Remote Coder, you'll need:
+
+1. **System requirements**
+
+   - [uv](https://github.com/astral-sh/uv) - Python package manager
+   - Python 3.11 or higher
+
+2. **Coding agent CLIs** (at least one required)
+
+   Remote Coder requires at least one coding agent CLI to be installed and authenticated:
+
+   - **Claude Code CLI** - [Installation guide](https://code.claude.com/docs/en/overview#npm)
+   - **Codex CLI** - [Installation guide](https://developers.openai.com/codex/cli/)
+   - **Gemini CLI** - [Installation guide](https://github.com/google-gemini/gemini-cli?tab=readme-ov-file#install-globally-with-npm)
+
+   After installing and authenticating your chosen CLI(s), use the `REMOTE_CODER_AGENTS` environment variable to specify which agents to enable (see configuration below). You can verify your CLIs are properly authenticated using the `!setup` command once Remote Coder is running.
+
+3. **Slack App** (required)
+
+   You'll need a Slack app with Socket Mode enabled to control Remote Coder. See the **Slack App Setup** section below for detailed instructions on creating the app and obtaining your `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`.
+
+4. **GitHub Personal Access Token**
+
+   If you want Remote Coder to automatically create and update pull requests, you'll need a GitHub PAT. See the **GitHub PAT Setup** section below for instructions.
+
+### 1. Install Remote Coder
 
 ```bash
 uv tool install git+https://github.com/PeterShin23/remote-coder --upgrade
@@ -62,8 +87,7 @@ Then edit `.env` and fill in:
 - `GITHUB_TOKEN` (optional, for PR automation)
 - `REMOTE_CODER_AGENTS` (optional, comma-separated list to limit which agents load)
 
-> Need help creating the Slack tokens? See **Slack App Setup** below.  
-> When you want to add/remove projects later, open `projects.yaml` in your editor and edit it directly—there’s no extra CLI ceremony.
+> When you want to add/remove projects later, open `projects.yaml` in your editor, edit it directly.
 
 Remote Coder loads variables from `.env` and the current shell. Shell environment variables take precedence.
 
@@ -101,6 +125,7 @@ Rules:
 - If `REMOTE_CODER_AGENTS` is unset or empty, all agents from `agents.yaml` are enabled.
 - If it is set, only the listed agents are loaded.
 - If any name in `REMOTE_CODER_AGENTS` does not exist in `agents.yaml`, Remote Coder fails fast on startup with a clear error message.
+- Make sure the agent names match CLIs you've installed and authenticated (see **Prerequisites** above).
 
 Set this in your `.env` file or export it in your shell before running `remote-coder`.
 
@@ -135,9 +160,9 @@ Set this in your `.env` file or export it in your shell before running `remote-c
    - **App-Level Token** (`SLACK_APP_TOKEN`, looks like `xapp-1-...`)
 6. Set `SLACK_ALLOWED_USER_IDS` (comma-separated) to the Slack user IDs that can talk to the bot. You can find your user ID in your Slack profile.
 
-## GitHub token (optional for PR features)
+## GitHub PAT Setup
 
-Future phases let the bot open/refresh pull requests and sync comments. Those calls require a GitHub token with access to the repositories you map in `projects.yaml`.
+To let the bot open/refresh pull requests and sync comments, it requires a GitHub token with access to the repositories you map in `projects.yaml`.
 
 1. Head to [github.com/settings/tokens](https://github.com/settings/tokens) and create either:
    - A **fine-grained** token scoped to the specific org/repo with `Contents: Read/Write` and `Pull requests: Read/Write`, or
