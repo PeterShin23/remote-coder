@@ -1,0 +1,53 @@
+# Define which CLI agents are available. Each entry describes the adapter type
+# plus the command invocation that should be executed.
+
+agents:
+  claude:
+    type: claude
+    # opus (claude-opus-4.5), sonnet (claude-sonnet-4.5), haiku (claude-haiku-4.5)
+    models:
+      default: sonnet
+      available: [opus, sonnet, haiku]
+    command:
+      - claude
+      - --print
+      - --permission-mode
+      - acceptEdits
+      - --output-format
+      - stream-json
+      - --verbose
+    working_dir_mode: project
+
+  codex:
+    type: codex
+    # base (gpt-5.1-codex), max (gpt-5.1-codex-max)
+    models:
+      default: base
+      available: [base, max]
+    command:
+      - codex
+      - exec
+      - --sandbox
+      - workspace-write
+      - --json
+      # WARNING: Be careful of prompt injection when using web search with codex!
+      # To disable web search, comment out the configs below.
+      - --config
+      - features.web_search_request=true
+      - --config
+      - sandbox_workspace_write.network_access=true
+    working_dir_mode: project
+
+  gemini:
+    type: gemini
+    # pro (gemini-2.5-pro), flash (gemini-2.5-flash)
+    models:
+      default: auto
+      available: [auto, pro, flash]
+    command:
+      - gemini
+      - --approval-mode
+      - auto_edit
+      - --output-format
+      - stream-json
+    working_dir_mode: project
