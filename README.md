@@ -101,7 +101,9 @@ Then edit `.env` and fill in your tokens. See the [Slack App Setup](#slack-app-s
 
 Please :)
 
-### 3. Start the daemon
+### 3. Start the daemon and keep laptop lid open
+
+Note: Closing your laptop lid will probably drop network requests.
 
 ```bash
 remote-coder
