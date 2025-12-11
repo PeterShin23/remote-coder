@@ -53,7 +53,9 @@ Before installing Remote Coder, you'll need:
 uv tool install git+https://github.com/PeterShin23/remote-coder --upgrade
 ```
 
-This installs a global `remote-coder` command. Want to contribute or modify the code? Clone the repo and run `uv pip install -e .` from the project root for an editable install.
+This installs a global `remote-coder` command. 
+
+Want to contribute or modify the code? Clone the repo and run `uv pip install -e .` from the project root for an editable install.
 
 ### 2. Initialize configuration
 
@@ -111,12 +113,7 @@ caffeinate -i remote-coder
 
 You should see logs indicating that `.env` and the YAML files were loaded, Slack Socket Mode connected, and the daemon is listening for events. Built-in Slack thread commands include `!use`, `!status`, `!review`, `!reload-projects`, `!setup`, `!end`, `!purge`, and `!help`.
 
-If you ever need to run against a different folder (for example, you keep configs inside your repo), either pass `--config-dir /path/to/config` or set an environment variable:
-
-```bash
-export REMOTE_CODER_CONFIG_DIR="/Users/you/projects/remote-coder/config"
-remote-coder
-```
+Remote Coder currently always uses `~/.remote-coder` for configuration. To use configs from elsewhere, copy or sync them into `~/.remote-coder`.
 
 ### Selecting which agents to enable
 

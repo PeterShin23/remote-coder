@@ -14,26 +14,63 @@ Thanks for helping shape Remote Coder! This document explains how to set up a de
    ```bash
    uv venv
    source .venv/bin/activate
-   uv pip install -e ".[dev]"
+   uv pip install -e
    ```
-4. Copy the configuration templates into a dedicated dev config directory:
+4. Copy the configuration templates:
    ```bash
-   mkdir -p dev-config
-   cp .env.example dev-config/.env
-   cp config/projects.yaml.example dev-config/projects.yaml
-   cp config/agents.yaml dev-config/agents.yaml
+   cp .env.example .env
+   cp config/projects.yaml.example config/projects.yaml
    ```
-5. Fill in `dev-config/.env` with valid Slack and GitHub tokens (see the README for details).
+5. Fill in `.env` with valid Slack and GitHub tokens (see the README for details).
+
+Remote Coder expects to read configuration from a directory that contains `.env`, `projects.yaml`, and `agents.yaml`. By default it uses `~/.remote-coder`. After preparing files in `config/` and `.env` in the root directory, copy them into `~/.remote-coder` (look at `scripts/copy_configs.sh`)
 
 ## Running the daemon in development
 
-Remote Coder expects to read configuration from a directory that contains `.env`, `projects.yaml`, and `agents.yaml`. With the files in `dev-config/`, launch the daemon via:
-
 ```bash
-uv run remote-coder --config-dir "$(pwd)/dev-config"
+uv run remote-coder  # Over remote-coder if you're in venv
 ```
 
-You can also run it directly with `python -m src.main --config-dir "$(pwd)/dev-config"` if you prefer.
+You can also run it directly with `python -m src.main` if you prefer.
+
+## Testing on another device (uv tool)
+
+You can install and test Remote Coder directly from Git on any machine using `uv tool`. This lets you verify changes without publishing a release.
+
+- Install from a branch:
+  ```bash
+  uv tool install "git+https://github.com/<you>/remote-coder.git@my-branch"
+  ```
+- Install from a specific commit (reproducible):
+  ```bash
+  uv tool install "git+https://github.com/<you>/remote-coder.git@abcdef1234"
+  ```
+- Install from a tag:
+  ```bash
+  uv tool install "git+https://github.com/<you>/remote-coder.git@v1.2.3"
+  ```
+- If the project lives in a subdirectory (not the case here, but useful for forks/experiments):
+  ```bash
+  uv tool install "git+https://github.com/<you>/repo.git@my-branch#subdirectory=path/to/subdir"
+  ```
+- Force a refresh if already installed:
+  ```bash
+  uv tool install --reinstall "git+https://github.com/<you>/remote-coder.git@my-branch"
+  ```
+- Uninstall the tool:
+  ```bash
+  uv tool uninstall remote-coder
+  ```
+
+Local dev without pushing changes:
+
+```bash
+uv tool install --path . --editable
+# later, to refresh after changes
+uv tool install --path . --editable --reinstall
+```
+
+Recommended workflow: keep `main` stable; test from a feature branch using `@branch`, and pin to a commit (`@<sha>`) when you need deterministic testing on other machines.
 
 ## Tests and linting
 
@@ -53,9 +90,9 @@ Please run both before opening a pull request. If you add new behavior, include 
 
 1. Always work from your own fork; direct clones of the upstream repository will not be considered for contribution.
 2. Open an issue or discussion if you’re planning a large change.
-2. Keep pull requests focused—small, reviewable chunks are easier to merge.
-3. Include screenshots or terminal output when changing user-visible behavior.
-4. Update documentation (README, docs/, or inline comments) when you add or change features.
+3. Keep pull requests focused—small, reviewable chunks are easier to merge.
+4. Include screenshots or terminal output when changing user-visible behavior.
+5. Update documentation (README, docs/, or inline comments) when you add or change features.
 6. Ensure the CI pipeline passes (tests + lint).
 
 Thanks again for contributing! If you have questions, open a GitHub Discussion or reach out via issues.

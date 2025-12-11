@@ -50,6 +50,18 @@ def cli(argv: Sequence[str] | None = None) -> int:
         help="Manage enabled agents",
     )
 
+    # Config slack subcommand
+    slack_parser = config_subparsers.add_parser(
+        "slack",
+        help="Configure Slack integration (guided setup)",
+    )
+
+    # Config github subcommand
+    github_parser = config_subparsers.add_parser(
+        "github",
+        help="Configure GitHub integration (guided setup)",
+    )
+
     args = parser.parse_args(argv)
 
     # Route to appropriate handler
@@ -63,6 +75,14 @@ def cli(argv: Sequence[str] | None = None) -> int:
             from .commands import run_config_agents_command
 
             return run_config_agents_command(args)
+        elif args.config_command == "slack":
+            from .commands import run_config_slack_command
+
+            return run_config_slack_command(args)
+        elif args.config_command == "github":
+            from .commands import run_config_github_command
+
+            return run_config_github_command(args)
         else:
             config_parser.print_help()
             return 1
