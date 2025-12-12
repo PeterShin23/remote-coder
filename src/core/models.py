@@ -61,6 +61,16 @@ class ConversationMessage:
 
 
 @dataclass
+class ConversationInteraction:
+    """Represents a user-agent interaction pair with summary tracking."""
+    interaction_number: int  # 1-indexed
+    user_message: ConversationMessage
+    agent_message: ConversationMessage
+    is_summarized: bool = False  # True if this interaction is part of summary
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class Session:
     project_id: str
     channel_id: str
@@ -70,6 +80,9 @@ class Session:
     project_path: Path
     active_model: Optional[str] = None  # User-facing model name (e.g., "sonnet", "base", "pro")
     conversation_history: List[ConversationMessage] = field(default_factory=list)
+    interactions: List[ConversationInteraction] = field(default_factory=list)  # Substantive interaction pairs
+    conversation_summary: Optional[str] = None  # Cached summary of early interactions
+    summary_interaction_count: int = 0  # How many interactions were summarized
     session_context: Dict[str, Any] = field(default_factory=dict)
     status: SessionStatus = SessionStatus.ACTIVE
     id: UUID = field(default_factory=uuid4)
