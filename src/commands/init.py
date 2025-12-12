@@ -335,7 +335,7 @@ def run_github_guided_setup() -> dict[str, str | None]:
 
     if has_token != "y":
         print("\nYou can create either:")
-        print("  [1] Fine-grained token (recommended) - scoped to specific repos")
+        print("  [1] Fine-grained token - scoped to specific repos")
         print("  [2] Classic token - broader access")
 
         token_type = input("\nYour choice (1/2) [1]: ").strip()
@@ -514,9 +514,9 @@ def interactive_setup() -> ConfigData:
         default_base_branch = "main"
 
         if github_token:
-            print("\nGitHub repository info (optional - press Enter to skip):")
+            print("\nGitHub repository info:")
             github_owner = prompt_with_validation(
-                "Enter GitHub owner/organization",
+                "Enter GitHub owner/organization (Used to manage PRs)",
                 validate_github_owner,
                 required=False,
             )
@@ -820,7 +820,7 @@ def run_init_command(args) -> int:
     print("  2. Ensure your coding agent CLIs are installed and authenticated:")
     for agent in set(proj.default_agent for proj in config.projects):
         print(f"     - {agent}")
-    print("  3. Invite your Slack bot to the project channels")
+    print("  3. IMPORTANT: Invite your Slack bot to the project channels")
     print("  4. Start the daemon:")
     print("     remote-coder")
     print()
