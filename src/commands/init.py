@@ -193,14 +193,31 @@ def run_slack_guided_setup() -> dict[str, str]:
     has_app = input("(y/N): ").strip().lower()
 
     if has_app != "y":
+        # Check if they have a workspace
+        print("\nDo you have a Slack workspace where you want to install Remote Coder?")
+        has_workspace = input("(Y/n): ").strip().lower()
+
+        if has_workspace == "n":
+            print("\nYou'll need to create a Slack workspace first:")
+            print("  1. Visit https://slack.com/create")
+            print("  2. Follow the steps to create a new workspace")
+            print("  3. Come back here when done")
+            input("\nPress Enter after creating your workspace...")
+
         print("\nWe'll create a Slack app with all required settings pre-configured:")
         print("  • Socket Mode enabled")
         print("  • Bot scopes: app_mentions:read, channels:history, channels:read, chat:write")
         print("  • Event subscriptions: app_mention, message.channels")
 
+        # Show manifest for manual use
+        print("\nHere's the app manifest (in case you need it):")
+        print("-" * 60)
+        manifest_json = json.dumps(SLACK_APP_MANIFEST, indent=2)
+        print(manifest_json)
+        print("-" * 60)
+
         # Create manifest URL
-        manifest_json = json.dumps(SLACK_APP_MANIFEST)
-        manifest_encoded = urllib.parse.quote(manifest_json)
+        manifest_encoded = urllib.parse.quote(json.dumps(SLACK_APP_MANIFEST))
         create_app_url = f"https://api.slack.com/apps?new_app=1&manifest_json={manifest_encoded}"
 
         input("\nPress Enter to open Slack's app creation page...")
@@ -209,17 +226,15 @@ def run_slack_guided_setup() -> dict[str, str]:
             webbrowser.open(create_app_url)
             print("\n✓ Browser opened to Slack app creation page")
         except Exception:
-            print("\n⚠ Could not open browser automatically.")
-            print("Please visit: https://api.slack.com/apps")
-            print("\nThen create a new app and paste this manifest:")
-            print("-" * 40)
-            print(json.dumps(SLACK_APP_MANIFEST, indent=2))
-            print("-" * 40)
+            print(f"\n⚠ Could not open browser. Please visit:")
+            print(f"  {create_app_url}")
 
         print("\nIn the browser:")
         print("  1. Select your workspace")
-        print("  2. Review the app configuration")
+        print("  2. Review the app configuration (should be pre-filled)")
         print("  3. Click 'Create'")
+        print("\nIf the manifest isn't pre-filled, click 'Create from manifest'")
+        print("and paste the JSON shown above.")
 
         input("\nPress Enter after creating the app...")
 
@@ -375,7 +390,7 @@ def interactive_setup() -> ConfigData:
     print("\nYou'll need:")
     print("  - Slack bot token (xoxb-*) and app token (xapp-*)")
     print("  - At least one Slack user ID")
-    print("  - GitHub personal access token (optional, for PR management)")
+    print("  - GitHub personal access token (for PR management)")
     print("  - Path to your projects directory")
     print("\nLet's get started!\n")
 
