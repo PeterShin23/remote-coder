@@ -315,7 +315,7 @@ def list_projects() -> int:
 
         print(f"{i}. {channel}")
         print(f"   Path: {path}")
-        print(f"   Agent: {agent}")
+        print(f"   Default Agent: {agent}")
 
         if github:
             owner = github.get("owner", "")
@@ -325,6 +325,11 @@ def list_projects() -> int:
         else:
             print(f"   GitHub: Not configured")
         print()
+    
+    print("The following commands can be appended:\n")
+    print(f"   add (to add to the list of configured projects)")
+    print(f"   edit (to edit a configured project)")
+    print(f"   remove (to remove a configured project)")
 
     return 0
 
