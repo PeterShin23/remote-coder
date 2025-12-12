@@ -47,12 +47,6 @@ class ClaudeAdapter(AgentAdapter):
             env=env,
         )
 
-        # Increase buffer limit for large JSON responses (default is 64KB)
-        if process.stdout:
-            process.stdout._limit = 10 * 1024 * 1024  # 10MB
-        if process.stderr:
-            process.stderr._limit = 10 * 1024 * 1024  # 10MB
-
         assert process.stdin is not None
         process.stdin.write(task_text.encode("utf-8") + b"\n")
         await process.stdin.drain()
@@ -66,22 +60,49 @@ class ClaudeAdapter(AgentAdapter):
         assert process.stderr is not None
         stderr_task = asyncio.create_task(process.stderr.read())
 
+        # Read stdout in chunks to avoid readline() buffer limit issues
         stdout_stream = process.stdout
         if stdout_stream:
-            async for raw_line in stdout_stream:
-                decoded = raw_line.decode("utf-8", errors="replace").strip()
-                raw_events.append(decoded)
-                if not decoded:
-                    continue
-                parsed = self._parse_json(decoded)
-                if not parsed:
-                    continue
+            buffer = ""
+            chunk_size = 1024 * 1024  # 1MB chunks
 
-                segments = self._extract_text_segments(parsed)
-                if segments:
-                    text_chunks.extend(segments)
-                file_edits.extend(self._extract_file_edits(parsed))
-                errors.extend(self._extract_errors(parsed))
+            while True:
+                chunk = await stdout_stream.read(chunk_size)
+                if not chunk:
+                    break
+
+                buffer += chunk.decode("utf-8", errors="replace")
+
+                # Process complete lines from buffer
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    decoded = line.strip()
+                    raw_events.append(decoded)
+
+                    if not decoded:
+                        continue
+
+                    parsed = self._parse_json(decoded)
+                    if not parsed:
+                        continue
+
+                    segments = self._extract_text_segments(parsed)
+                    if segments:
+                        text_chunks.extend(segments)
+                    file_edits.extend(self._extract_file_edits(parsed))
+                    errors.extend(self._extract_errors(parsed))
+
+            # Process any remaining data in buffer
+            if buffer.strip():
+                decoded = buffer.strip()
+                raw_events.append(decoded)
+                parsed = self._parse_json(decoded)
+                if parsed:
+                    segments = self._extract_text_segments(parsed)
+                    if segments:
+                        text_chunks.extend(segments)
+                    file_edits.extend(self._extract_file_edits(parsed))
+                    errors.extend(self._extract_errors(parsed))
 
         return_code = await process.wait()
         stderr_raw = await stderr_task
