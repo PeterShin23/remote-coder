@@ -64,7 +64,7 @@ class ClaudeAdapter(AgentAdapter):
         stdout_stream = process.stdout
         if stdout_stream:
             buffer = ""
-            chunk_size = 1024 * 1024  # 1MB chunks
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
 
             while True:
                 chunk = await stdout_stream.read(chunk_size)
