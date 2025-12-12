@@ -12,6 +12,18 @@ from typing import Callable
 import requests
 import yaml
 
+from .config_github import (
+    run_config_github_command,
+    update_env_github_config,
+    validate_github_token_api,
+)
+from .config_slack import (
+    SLACK_APP_MANIFEST,
+    run_config_slack_command,
+    update_env_slack_config,
+    validate_slack_bot_token_api,
+)
+from .utils import detect_dev_mode, sync_to_home_config
 from .validators import (
     validate_agent_name,
     validate_branch_name,
@@ -162,6 +174,213 @@ def prompt_with_validation(
             print(f"Error: {error_msg}\n")
 
 
+def run_slack_guided_setup() -> dict[str, str]:
+    """
+    Run guided Slack setup flow inline within init.
+
+    Returns dict with bot_token, app_token, user_ids.
+    """
+    import json
+    import urllib.parse
+    import webbrowser
+
+    print("\n" + "-" * 60)
+    print("Guided Slack Setup")
+    print("-" * 60)
+
+    # Check if user has existing app
+    print("\nDo you have an existing Slack app configured for Remote Coder?")
+    has_app = input("(y/N): ").strip().lower()
+
+    if has_app != "y":
+        # Check if they have a workspace
+        print("\nDo you have a Slack workspace where you want to install Remote Coder?")
+        has_workspace = input("(Y/n): ").strip().lower()
+
+        if has_workspace == "n":
+            print("\nYou'll need to create a Slack workspace first:")
+            print("  1. Visit https://slack.com/create")
+            print("  2. Follow the steps to create a new workspace")
+            print("  3. Come back here when done")
+            input("\nPress Enter after creating your workspace...")
+
+        print("\nWe'll create a Slack app with all required settings pre-configured:")
+        print("  • Socket Mode enabled")
+        print("  • Bot scopes: app_mentions:read, channels:history, channels:read, chat:write")
+        print("  • Event subscriptions: app_mention, message.channels")
+
+        # Show manifest for manual use
+        print("\nHere's the app manifest (in case you need it):")
+        print("-" * 60)
+        manifest_json = json.dumps(SLACK_APP_MANIFEST, indent=2)
+        print(manifest_json)
+        print("-" * 60)
+
+        # Create manifest URL
+        manifest_encoded = urllib.parse.quote(json.dumps(SLACK_APP_MANIFEST))
+        create_app_url = f"https://api.slack.com/apps?new_app=1&manifest_json={manifest_encoded}"
+
+        input("\nPress Enter to open Slack's app creation page...")
+
+        try:
+            webbrowser.open(create_app_url)
+            print("\n✓ Browser opened to Slack app creation page")
+        except Exception:
+            print(f"\n⚠ Could not open browser. Please visit:")
+            print(f"  {create_app_url}")
+
+        print("\nIn the browser:")
+        print("  1. Select your workspace")
+        print("  2. Review the app configuration (should be pre-filled)")
+        print("  3. Click 'Create'")
+        print("\nIf the manifest isn't pre-filled, click 'Create from manifest'")
+        print("and paste the JSON shown above.")
+
+        input("\nPress Enter after creating the app...")
+
+    # Step 2: App-Level Token
+    print("\n" + "-" * 60)
+    print("Step: Generate App-Level Token")
+    print("-" * 60)
+
+    try:
+        webbrowser.open("https://api.slack.com/apps")
+        print("\n✓ Browser opened to Slack apps page")
+    except Exception:
+        print("\nPlease go to: https://api.slack.com/apps")
+
+    print("\nIn your app settings:")
+    print("  1. Click on your app (Remote Coder)")
+    print("  2. Go to 'Basic Information' in the left sidebar")
+    print("  3. Scroll down to 'App-Level Tokens'")
+    print("  4. Click 'Generate Token and Scopes'")
+    print("  5. Name it (e.g., 'socket-mode')")
+    print("  6. Add scope: connections:write")
+    print("  7. Click 'Generate'")
+    print("  8. Copy the token (starts with xapp-)")
+
+    slack_app_token = prompt_with_validation(
+        "\nPaste your App-Level Token (xapp-...)",
+        validate_slack_app_token,
+        required=True,
+    )
+    print("✓ App token received")
+
+    # Step 3: Bot Token
+    print("\n" + "-" * 60)
+    print("Step: Install App & Get Bot Token")
+    print("-" * 60)
+
+    print("\nIn your app settings:")
+    print("  1. Go to 'OAuth & Permissions' in the left sidebar")
+    print("  2. Click 'Install to Workspace' (or 'Reinstall' if needed)")
+    print("  3. Authorize the app")
+    print("  4. Copy the 'Bot User OAuth Token' (starts with xoxb-)")
+
+    slack_bot_token = prompt_with_validation(
+        "\nPaste your Bot User OAuth Token (xoxb-...)",
+        validate_slack_bot_token,
+        required=True,
+    )
+
+    # Validate bot token
+    print("\n→ Validating bot token...")
+    is_valid, error, auth_data = validate_slack_bot_token_api(slack_bot_token)
+    if is_valid and auth_data:
+        print(f"✓ Bot token valid! Team: {auth_data.get('team', 'Unknown')}")
+    else:
+        print(f"⚠ Could not validate token: {error}")
+        print("  Continuing anyway...")
+
+    # Step 4: User IDs
+    print("\n" + "-" * 60)
+    print("Step: Configure Allowed Users")
+    print("-" * 60)
+
+    print("\nTo find your Slack User ID:")
+    print("  1. Click on your profile picture in Slack")
+    print("  2. Click 'Profile'")
+    print("  3. Click the '...' menu")
+    print("  4. Select 'Copy member ID'")
+
+    slack_user_ids = prompt_with_validation(
+        "\nEnter allowed Slack user IDs (comma-separated)",
+        validate_slack_user_ids,
+        required=True,
+    )
+
+    print("\n✓ Slack configuration complete!")
+
+    return {
+        "bot_token": slack_bot_token,
+        "app_token": slack_app_token,
+        "user_ids": slack_user_ids,
+    }
+
+
+def run_github_guided_setup() -> dict[str, str | None]:
+    """
+    Run guided GitHub setup flow inline within init.
+
+    Returns dict with token (may be None if skipped).
+    """
+    import webbrowser
+
+    print("\n" + "-" * 60)
+    print("Guided GitHub Setup")
+    print("-" * 60)
+
+    print("\nDo you have an existing GitHub Personal Access Token?")
+    has_token = input("(y/N): ").strip().lower()
+
+    if has_token != "y":
+        print("\nYou can create either:")
+        print("  [1] Fine-grained token - scoped to specific repos")
+        print("  [2] Classic token - broader access")
+
+        token_type = input("\nYour choice (1/2) [1]: ").strip()
+
+        if token_type == "2":
+            url = "https://github.com/settings/tokens/new?description=Remote%20Coder&scopes=repo"
+            print("\nRequired scope: 'repo' (Full control of private repositories)")
+        else:
+            url = "https://github.com/settings/personal-access-tokens/new"
+            print("\nConfigure with:")
+            print("  • Repository access: select repos Remote Coder will manage")
+            print("  • Permissions: Contents (R/W), Pull requests (R/W)")
+
+        input("\nPress Enter to open browser...")
+
+        try:
+            webbrowser.open(url)
+            print("✓ Browser opened")
+        except Exception:
+            print(f"⚠ Please visit: {url}")
+
+        print("\nCreate the token, then copy it.")
+
+    github_token = prompt_with_validation(
+        "\nPaste your GitHub token (or press Enter to skip)",
+        validate_github_token,
+        required=False,
+    )
+
+    if github_token:
+        print("\n→ Validating token...")
+        is_valid, error, user_data = validate_github_token_api(github_token)
+        if is_valid and user_data:
+            print(f"✓ Token valid! Authenticated as: {user_data.get('login', 'Unknown')}")
+        else:
+            print(f"⚠ Could not validate: {error}")
+            print("  Continuing anyway...")
+
+        print("\n✓ GitHub configuration complete!")
+    else:
+        print("\n→ Skipping GitHub setup (can configure later with 'remote-coder config github')")
+
+    return {"token": github_token if github_token else None}
+
+
 def interactive_setup() -> ConfigData:
     """Run interactive prompts to collect all configuration values."""
     print("\n" + "=" * 60)
@@ -171,38 +390,65 @@ def interactive_setup() -> ConfigData:
     print("\nYou'll need:")
     print("  - Slack bot token (xoxb-*) and app token (xapp-*)")
     print("  - At least one Slack user ID")
-    print("  - GitHub personal access token (optional, for PR management)")
+    print("  - GitHub personal access token (for PR management)")
     print("  - Path to your projects directory")
     print("\nLet's get started!\n")
 
     # Slack configuration
     print("Slack Configuration")
     print("-" * 60)
-    slack_bot_token = prompt_with_validation(
-        "Enter your SLACK_BOT_TOKEN (starts with xoxb-)",
-        validate_slack_bot_token,
-        required=True,
-    )
-    slack_app_token = prompt_with_validation(
-        "Enter your SLACK_APP_TOKEN (starts with xapp-)",
-        validate_slack_app_token,
-        required=True,
-    )
-    slack_allowed_user_ids = prompt_with_validation(
-        "Enter allowed Slack user IDs (comma-separated)",
-        validate_slack_user_ids,
-        required=True,
-    )
+    print("\nHow would you like to set up Slack?")
+    print("  [1] Guided setup (opens browser, walks you through each step)")
+    print("  [2] Manual setup (paste tokens you already have)")
+
+    slack_setup_method = input("\nYour choice (1/2) [1]: ").strip()
+    if slack_setup_method == "2":
+        # Manual setup - original flow
+        slack_bot_token = prompt_with_validation(
+            "Enter your SLACK_BOT_TOKEN (starts with xoxb-)",
+            validate_slack_bot_token,
+            required=True,
+        )
+        slack_app_token = prompt_with_validation(
+            "Enter your SLACK_APP_TOKEN (starts with xapp-)",
+            validate_slack_app_token,
+            required=True,
+        )
+        slack_allowed_user_ids = prompt_with_validation(
+            "Enter allowed Slack user IDs (comma-separated)",
+            validate_slack_user_ids,
+            required=True,
+        )
+    else:
+        # Guided setup
+        slack_result = run_slack_guided_setup()
+        slack_bot_token = slack_result["bot_token"]
+        slack_app_token = slack_result["app_token"]
+        slack_allowed_user_ids = slack_result["user_ids"]
 
     # GitHub configuration
     print("\nGitHub Configuration")
     print("-" * 60)
-    print("(Optional - press Enter to skip if you don't want GitHub integration)")
-    github_token = prompt_with_validation(
-        "Enter your GITHUB_TOKEN (starts with ghp_, github_pat_, or gho_)",
-        validate_github_token,
-        required=False,
-    )
+    print("\nGitHub integration enables automatic PR creation and management.")
+    print("\nHow would you like to set up GitHub?")
+    print("  [1] Guided setup (opens browser, walks you through token creation)")
+    print("  [2] Manual setup (paste a token you already have)")
+    print("  [3] Skip (set up later with 'remote-coder config github')")
+
+    github_setup_method = input("\nYour choice (1/2/3) [1]: ").strip()
+    if github_setup_method == "3":
+        github_token = None
+    elif github_setup_method == "2":
+        # Manual setup - original flow
+        github_token = prompt_with_validation(
+            "Enter your GITHUB_TOKEN (starts with ghp_, github_pat_, or gho_)",
+            validate_github_token,
+            required=False,
+        )
+    else:
+        # Guided setup
+        github_result = run_github_guided_setup()
+        github_token = github_result.get("token")
 
     # Projects configuration
     print("\nProjects Configuration")
@@ -268,9 +514,9 @@ def interactive_setup() -> ConfigData:
         default_base_branch = "main"
 
         if github_token:
-            print("\nGitHub repository info (optional - press Enter to skip):")
+            print("\nGitHub repository info:")
             github_owner = prompt_with_validation(
-                "Enter GitHub owner/organization",
+                "Enter GitHub owner/organization (Used to manage PRs)",
                 validate_github_owner,
                 required=False,
             )
@@ -482,8 +728,14 @@ def run_init_command(args) -> int:
     Returns:
         Exit status code (0 for success, 1 for error)
     """
-    # Always use ~/.remote-coder
-    target_dir = DEFAULT_CONFIG_DIR
+    # Detect dev mode
+    is_dev_mode, project_root = detect_dev_mode()
+
+    if is_dev_mode and project_root:
+        target_dir = project_root
+        print(f"\n[Dev mode detected - will update {target_dir}]")
+    else:
+        target_dir = DEFAULT_CONFIG_DIR
 
     # Check if directory exists and handle overwrite
     if not check_existing_config(target_dir):
@@ -508,17 +760,31 @@ def run_init_command(args) -> int:
         print("Initialization cancelled.")
         return 0
 
+    # Determine file paths based on dev/user mode
+    if is_dev_mode and project_root:
+        env_path = target_dir / ".env"
+        config_subdir = target_dir / "config"
+        projects_yaml_path = config_subdir / "projects.yaml"
+        agents_yaml_path = config_subdir / "agents.yaml"
+    else:
+        env_path = target_dir / ".env"
+        projects_yaml_path = target_dir / "projects.yaml"
+        agents_yaml_path = target_dir / "agents.yaml"
+        config_subdir = None
+
     # Create directory structure
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\nCreating configuration directory: {target_dir}")
+        if config_subdir:
+            config_subdir.mkdir(parents=True, exist_ok=True)
+        print(f"\nCreating configuration in: {target_dir}")
     except Exception as e:
         print(f"Error: Failed to create config directory: {e}")
         return 1
 
     # Download agents.yaml from GitHub (with fallback)
     try:
-        download_agents_yaml(target_dir / "agents.yaml")
+        download_agents_yaml(agents_yaml_path)
     except Exception as e:
         print(f"Error: Failed to create agents.yaml: {e}")
         return 1
@@ -526,7 +792,7 @@ def run_init_command(args) -> int:
     # Generate .env file
     try:
         print("Writing .env...")
-        generate_env_file(target_dir / ".env", config)
+        generate_env_file(env_path, config)
     except Exception as e:
         print(f"Error: Failed to create .env: {e}")
         return 1
@@ -534,7 +800,7 @@ def run_init_command(args) -> int:
     # Generate projects.yaml file
     try:
         print("Writing projects.yaml...")
-        generate_projects_yaml(target_dir / "projects.yaml", config)
+        generate_projects_yaml(projects_yaml_path, config)
     except Exception as e:
         print(f"Error: Failed to create projects.yaml: {e}")
         return 1
@@ -544,17 +810,19 @@ def run_init_command(args) -> int:
     print("Success! Configuration created at:")
     print(f"  {target_dir}")
     print("=" * 60)
+
+    # If dev mode, sync to ~/.remote-coder
+    if is_dev_mode and project_root:
+        sync_to_home_config(project_root)
+
     print("\nNext steps:")
     print("  1. Review your configuration files if needed")
     print("  2. Ensure your coding agent CLIs are installed and authenticated:")
     for agent in set(proj.default_agent for proj in config.projects):
         print(f"     - {agent}")
-    print("  3. Invite your Slack bot to the project channels")
+    print("  3. IMPORTANT: Invite your Slack bot to the project channels")
     print("  4. Start the daemon:")
-    print(f"     remote-coder")
-    if target_dir != DEFAULT_CONFIG_DIR:
-        print(f"     or")
-        print(f"     remote-coder --config-dir {target_dir}")
+    print("     remote-coder")
     print()
 
     return 0

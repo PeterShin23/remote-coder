@@ -50,6 +50,32 @@ def cli(argv: Sequence[str] | None = None) -> int:
         help="Manage enabled agents",
     )
 
+    # Config slack subcommand
+    slack_parser = config_subparsers.add_parser(
+        "slack",
+        help="Configure Slack integration (guided setup)",
+    )
+
+    # Config github subcommand
+    github_parser = config_subparsers.add_parser(
+        "github",
+        help="Configure GitHub integration (guided setup)",
+    )
+
+    # Config projects subcommand
+    projects_parser = config_subparsers.add_parser(
+        "projects",
+        help="Manage projects",
+    )
+    projects_subparsers = projects_parser.add_subparsers(
+        dest="projects_command",
+        help="Project operations"
+    )
+    projects_subparsers.add_parser("add", help="Add a new project")
+    projects_subparsers.add_parser("list", help="List all projects")
+    projects_subparsers.add_parser("remove", help="Remove a project")
+    projects_subparsers.add_parser("edit", help="Edit a project")
+
     args = parser.parse_args(argv)
 
     # Route to appropriate handler
@@ -63,6 +89,18 @@ def cli(argv: Sequence[str] | None = None) -> int:
             from .commands import run_config_agents_command
 
             return run_config_agents_command(args)
+        elif args.config_command == "slack":
+            from .commands import run_config_slack_command
+
+            return run_config_slack_command(args)
+        elif args.config_command == "github":
+            from .commands import run_config_github_command
+
+            return run_config_github_command(args)
+        elif args.config_command == "projects":
+            from .commands import run_config_projects_command
+
+            return run_config_projects_command(args)
         else:
             config_parser.print_help()
             return 1

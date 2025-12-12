@@ -52,11 +52,6 @@ class CodexAdapter(AgentAdapter):
             env=env,
         )
 
-        if process.stdout:
-            process.stdout._limit = 10 * 1024 * 1024  # 10MB
-        if process.stderr:
-            process.stderr._limit = 10 * 1024 * 1024  # 10MB
-
         assert process.stdin is not None
         stdin_payload = (task_text + "\n").encode("utf-8")
         process.stdin.write(stdin_payload)
@@ -71,14 +66,41 @@ class CodexAdapter(AgentAdapter):
         assert process.stderr is not None
         stderr_task = asyncio.create_task(process.stderr.read())
 
+        # Read stdout in chunks to avoid readline() buffer limit issues
         stdout_stream = process.stdout
         if stdout_stream:
-            async for raw_line in stdout_stream:
-                decoded = raw_line.decode("utf-8", errors="replace").strip()
-                raw_events.append(decoded)
-                if not decoded:
-                    continue
+            buffer = ""
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
 
+            while True:
+                chunk = await stdout_stream.read(chunk_size)
+                if not chunk:
+                    break
+
+                buffer += chunk.decode("utf-8", errors="replace")
+
+                # Process complete lines from buffer
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    decoded = line.strip()
+                    raw_events.append(decoded)
+
+                    if not decoded:
+                        continue
+
+                    parsed = self._parse_json(decoded)
+                    if parsed:
+                        LOGGER.debug(f"Parsed Codex JSON event: {parsed}")
+                        text_chunks.extend(self._extract_text_segments(parsed))
+                        file_edits.extend(self._extract_file_edits(parsed))
+                        errors.extend(self._extract_errors(parsed))
+                    else:
+                        text_chunks.append(decoded)
+
+            # Process any remaining data in buffer
+            if buffer.strip():
+                decoded = buffer.strip()
+                raw_events.append(decoded)
                 parsed = self._parse_json(decoded)
                 if parsed:
                     LOGGER.debug(f"Parsed Codex JSON event: {parsed}")

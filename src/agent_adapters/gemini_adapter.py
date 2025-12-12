@@ -55,12 +55,6 @@ class GeminiAdapter(AgentAdapter):
             env=env,
         )
 
-        # Increase buffer limit for large JSON responses (default is 64KB)
-        if process.stdout:
-            process.stdout._limit = 10 * 1024 * 1024  # 10MB
-        if process.stderr:
-            process.stderr._limit = 10 * 1024 * 1024  # 10MB
-
         raw_events: list[str] = []
         text_chunks: list[str] = []
         file_edits: list[FileEdit] = []
@@ -70,16 +64,58 @@ class GeminiAdapter(AgentAdapter):
         assert process.stderr is not None
         stderr_task = asyncio.create_task(process.stderr.read())
 
-        # Parse stream-json output line by line
+        # Read stdout in chunks to avoid readline() buffer limit issues
         stdout_stream = process.stdout
         if stdout_stream:
-            async for raw_line in stdout_stream:
-                decoded = raw_line.decode("utf-8", errors="replace").strip()
-                raw_events.append(decoded)
-                if not decoded:
-                    continue
+            buffer = ""
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
 
-                # Try to parse as JSON
+            while True:
+                chunk = await stdout_stream.read(chunk_size)
+                if not chunk:
+                    break
+
+                buffer += chunk.decode("utf-8", errors="replace")
+
+                # Process complete lines from buffer
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    decoded = line.strip()
+                    raw_events.append(decoded)
+
+                    if not decoded:
+                        continue
+
+                    # Try to parse as JSON
+                    parsed = self._parse_json(decoded)
+                    if parsed:
+                        # Handle streaming delta messages
+                        if parsed.get("type") == "message" and parsed.get("role") == "assistant":
+                            content = parsed.get("content", "")
+                            is_delta = parsed.get("delta", False)
+
+                            if is_delta:
+                                # Accumulate delta chunks
+                                streaming_buffer += content
+                            else:
+                                # Complete message (not a delta)
+                                if streaming_buffer:
+                                    # Flush any buffered delta content first
+                                    text_chunks.append(streaming_buffer)
+                                    streaming_buffer = ""
+                                if content:
+                                    text_chunks.append(content)
+
+                        file_edits.extend(self._extract_file_edits(parsed))
+                        errors.extend(self._extract_errors(parsed))
+                    else:
+                        # If not JSON, treat as plain text output
+                        text_chunks.append(decoded)
+
+            # Process any remaining data in buffer
+            if buffer.strip():
+                decoded = buffer.strip()
+                raw_events.append(decoded)
                 parsed = self._parse_json(decoded)
                 if parsed:
                     # Handle streaming delta messages
@@ -88,12 +124,9 @@ class GeminiAdapter(AgentAdapter):
                         is_delta = parsed.get("delta", False)
 
                         if is_delta:
-                            # Accumulate delta chunks
                             streaming_buffer += content
                         else:
-                            # Complete message (not a delta)
                             if streaming_buffer:
-                                # Flush any buffered delta content first
                                 text_chunks.append(streaming_buffer)
                                 streaming_buffer = ""
                             if content:
@@ -102,7 +135,6 @@ class GeminiAdapter(AgentAdapter):
                     file_edits.extend(self._extract_file_edits(parsed))
                     errors.extend(self._extract_errors(parsed))
                 else:
-                    # If not JSON, treat as plain text output
                     text_chunks.append(decoded)
 
         # Flush any remaining buffered content
