@@ -17,7 +17,8 @@ from ..github.client import EnsurePROptions, PRComment
 from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
 from .config import Config, load_config
 from .errors import AgentNotFound, ConfigError, GitHubError, ProjectNotFound, SessionNotFound
-from .models import Agent, AgentType, Project, Session, SessionStatus
+from .interaction_classifier import InteractionClassifier
+from .models import Agent, AgentType, ConversationMessage, Project, Session, SessionStatus
 from .session_manager import SessionManager
 
 LOGGER = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class Router:
         self._adapter_cache: Dict[str, AgentAdapter] = {}
         self._session_locks: Dict[str, asyncio.Lock] = {}
         self.active_runs: Dict[str, Dict[str, Any]] = {}
+        self._interaction_classifier = InteractionClassifier()
 
     def bind_adapter(self, adapter: IChatAdapter) -> None:
         """Attach the chat adapter so the router can send replies."""
@@ -182,7 +184,11 @@ class Router:
 
         history_snapshot = self._session_manager.get_conversation_history(session.id)
         adapter_history = self._format_history_for_adapter(history_snapshot)
-        task_text = self._build_task_text(history_snapshot, user_text)
+
+        # Get formatted context from interactions (with summaries if applicable)
+        interaction_context = self._session_manager.get_context_for_agent(session.id)
+
+        task_text = self._build_task_text(interaction_context, user_text)
 
         self._session_manager.append_user_message(session.id, user_text)
 
@@ -273,6 +279,15 @@ class Router:
         if result.file_edits and not result.structured_output:
             edits_summary = ", ".join({edit.path for edit in result.file_edits})
             response_text = f"{response_text}\n\nDetected file edits: {edits_summary}"
+
+        # Track interaction for context passing in future requests
+        user_message = ConversationMessage(role="user", content=user_text)
+        self._session_manager.append_interaction(
+            session.id,
+            user_message=user_message,
+            agent_result=result,
+            classifier=self._interaction_classifier,
+        )
 
         self._session_manager.append_agent_message(session.id, response_text)
         self._session_manager.update_session_context(session.id, result.session_context)
@@ -570,18 +585,22 @@ class Router:
         prompt = self._build_review_prompt(pr_ref.url, comments)
         await self._execute_agent_task(session, project, channel, thread_ts, prompt)
 
-    def _build_task_text(self, history: Sequence, user_text: str) -> str:
-        recent = history[-5:]
-        history_lines = [
-            f"{'User' if msg.role == 'user' else 'Assistant'}: {msg.content}".strip()
-            for msg in recent
-            if msg.content
-        ]
-        context_block = "\n".join(history_lines) if history_lines else "No prior conversation."
+    def _build_task_text(self, context: str, user_text: str) -> str:
+        """
+        Build task text with context and current user request.
+
+        Args:
+            context: Formatted context from interactions (may include summaries)
+            user_text: The current user request
+
+        Returns:
+            Complete task text ready for agent execution
+        """
+        context_block = context if context else "No prior conversation."
         return (
             f"{CODE_TASK_WRAPPER}\n\n"
-            f"Recent Slack context:\n{context_block}\n\n"
-            f"Current user request:\n{user_text}\n"
+            f"## CONTEXT ON THE WORK SO FAR:\n{context_block}\n\n"
+            f"CURRENT ASK:\nUSER:\n{user_text}\n"
             "Provide your answer below. If you changed code, summarize the edits and tests you ran."
         )
 

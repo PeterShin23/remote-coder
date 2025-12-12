@@ -5,12 +5,19 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 from threading import RLock
-from typing import Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Sequence, Tuple
 from uuid import UUID
 
 from .errors import SessionNotFound
+
+if TYPE_CHECKING:
+    from src.agent_adapters.base import AgentResult
+from .interaction_classifier import InteractionClassifier
+from .conversation_summarizer import ConversationSummarizer
+from .context_builder import ContextBuilder
 from .models import (
     AgentType,
+    ConversationInteraction,
     ConversationMessage,
     Project,
     PullRequestRef,
@@ -141,6 +148,161 @@ class SessionManager:
                 self._pr_refs.pop(sid, None)
             self._thread_index = {k: v for k, v in self._thread_index.items() if v not in to_remove}
         return len(to_remove)
+
+    def append_interaction(
+        self,
+        session_id: UUID,
+        user_message: ConversationMessage,
+        agent_result: AgentResult,
+        classifier: InteractionClassifier,
+    ) -> None:
+        """
+        Create and append an interaction if agent result is substantive.
+        Automatically manage summarization when hitting 10 interactions.
+
+        Args:
+            session_id: The session UUID
+            user_message: The user's request (ConversationMessage)
+            agent_result: The structured result from agent adapter (AgentResult)
+            classifier: InteractionClassifier instance
+        """
+        # Check if result is substantive
+        if not classifier.is_substantive(agent_result):
+            LOGGER.debug("Agent result is not substantive, skipping interaction")
+            return
+
+        # Extract the content
+        agent_text = classifier.extract_context_content(agent_result)
+        agent_message = ConversationMessage(role="assistant", content=agent_text)
+
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                raise SessionNotFound(session_id)
+
+            # Create interaction with 1-indexed number
+            interaction_number = len(session.interactions) + 1
+            interaction = ConversationInteraction(
+                interaction_number=interaction_number,
+                user_message=user_message,
+                agent_message=agent_message,
+            )
+
+            session.interactions.append(interaction)
+            session.updated_at = datetime.now(timezone.utc)
+
+            LOGGER.info(
+                "Appended interaction #%d to session %s",
+                interaction_number,
+                session_id
+            )
+
+            # Check if we should trigger summarization
+            if len(session.interactions) == 10:
+                LOGGER.info(
+                    "Session %s reached 10 interactions, triggering summarization",
+                    session_id
+                )
+                self._perform_summarization_locked(session)
+
+    def _perform_summarization_locked(self, session: Session) -> None:
+        """
+        Perform summarization on a session (assumes lock is held).
+
+        Summarizes interactions 1-5, marks them as summarized,
+        keeps interactions 6-10 in detail.
+
+        Args:
+            session: The session to summarize
+        """
+        if session.conversation_summary is not None:
+            # Already summarized
+            LOGGER.debug("Session already has a summary, skipping")
+            return
+
+        # Summarize first 5 interactions
+        interactions_to_summarize = session.interactions[:5]
+        summary = ConversationSummarizer.summarize_interactions(
+            interactions_to_summarize,
+            count=5
+        )
+
+        # Mark these interactions as summarized
+        for interaction in interactions_to_summarize:
+            interaction.is_summarized = True
+
+        # Store summary in session
+        session.conversation_summary = summary
+        session.summary_interaction_count = 5
+
+        LOGGER.info("Summarized first 5 interactions for session %s", session.id)
+
+    def should_summarize(self, session_id: UUID) -> bool:
+        """
+        Check if a session should have summarization performed.
+
+        Returns True if the session just reached 10 interactions
+        and doesn't have a summary yet.
+
+        Args:
+            session_id: The session UUID
+
+        Returns:
+            True if summarization should be performed
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                return False
+
+            # Summarize if we have exactly 10 interactions and no summary yet
+            return (
+                len(session.interactions) == 10
+                and session.conversation_summary is None
+            )
+
+    def perform_summarization(self, session_id: UUID) -> None:
+        """
+        Perform summarization on a session.
+
+        Summarizes interactions 1-5, marks them as summarized,
+        keeps interactions 6-10 in detail.
+
+        Args:
+            session_id: The session UUID
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                raise SessionNotFound(session_id)
+            self._perform_summarization_locked(session)
+
+    def get_context_for_agent(self, session_id: UUID) -> str:
+        """
+        Get formatted context string ready to prepend to task_text.
+
+        Includes full history or summary + recent interactions based on
+        the current state of the conversation.
+
+        Args:
+            session_id: The session UUID
+
+        Returns:
+            Formatted context string (may be empty if no interactions)
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                raise SessionNotFound(session_id)
+
+            # Build context using ContextBuilder
+            context = ContextBuilder.build_context_for_agent(
+                interactions=session.interactions,
+                summary=session.conversation_summary,
+                summarized_count=session.summary_interaction_count,
+            )
+
+            return context
 
     def set_pr_ref(self, pr_ref: PullRequestRef) -> None:
         with self._lock:
