@@ -25,7 +25,7 @@ from .models import (
     WorkingDirMode,
 )
 from .router import Router
-from .session_manager import SessionManager
+from .conversation import SessionManager
 
 __all__ = [
     "Config",

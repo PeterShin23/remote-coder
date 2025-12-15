@@ -5,47 +5,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import UUID
 
-from ..agent_adapters import AgentAdapter, AgentResult, ClaudeAdapter, CodexAdapter, GeminiAdapter
 from ..chat_adapters.i_chat_adapter import IChatAdapter
 from ..github import GitHubManager
-from ..github.client import EnsurePROptions, PRComment
-from .command_parser import MENTION_PREFIX, ParsedCommand, parse_command
+from ..github.client import PRComment
+from .agent_runner import AgentTaskRunner
+from .commands.parser import ParsedCommand, parse_command
+from .commands.catalog import CatalogCommandHandler
+from .commands.context import CommandContext
+from .commands.dispatcher import CommandDispatcher
+from .commands.maintenance import MaintenanceCommandHandler
+from .commands.registry import CommandSpec
+from .commands.review import ReviewCommandHandler
+from .commands.session import SessionCommandHandler
 from .config import Config, load_config
-from .errors import AgentNotFound, ConfigError, GitHubError, ProjectNotFound, SessionNotFound
-from .interaction_classifier import InteractionClassifier
-from .models import Agent, AgentType, ConversationMessage, Project, Session, SessionStatus
-from .session_manager import SessionManager
+from .errors import GitHubError, ProjectNotFound, SessionNotFound
+from .git_workflow import GitWorkflowService
+from .conversation import InteractionClassifier, SessionManager
+from .models import Project, Session, SessionStatus
 
 LOGGER = logging.getLogger(__name__)
 
-CODE_TASK_WRAPPER = """You are Remote Coder, an autonomous developer working inside the user's repository.
-
-1. Carefully read the latest Slack request and decide whether it requires code changes.
-2. If it does, plan the steps, edit the files directly, and ensure the work is ready for a pull request (run relevant tests/linters when needed).
-3. If no code changes are required, explain why and offer guidance instead of editing files.
-4. Never fabricate results or skip steps—only describe what you actually verified or changed.
-5. Code changes are ALWAYS automatically committed and pushed - NEVER ask for approval or say "awaiting approval".
-
-CRITICAL: You MUST end your response with a JSON block starting with "REMOTE_CODER_OUTPUT:" followed by valid JSON with DOUBLE QUOTES (not single quotes).
-
-For code changes (when you made file edits):
-REMOTE_CODER_OUTPUT: {"slack_message": "Brief summary of changes for Slack (plain text, no markdown)", "pr_title": "Short descriptive PR title (few words)", "pr_summary": ["First major change", "Second major change"]}
-
-For questions/explanations (no code changes):
-REMOTE_CODER_OUTPUT: {"slack_message": "Your explanation or answer (plain text, no markdown)", "pr_title": "", "pr_summary": []}
-
-Rules:
-- Use DOUBLE QUOTES in JSON, not single quotes
-- slack_message: Plain text only, NO markdown. Format for Slack's readability. Include file paths, line numbers, and clear explanations. DO NOT mention "awaiting approval" or "waiting for commit" - just describe what you did.
-- pr_title: Short phrase (3-6 words) describing the main change when code changes are made, empty string otherwise
-- pr_summary: Array of brief bullet points describing major changes (omit minor tweaks), empty array if no code changes
-- The JSON can span multiple lines but must use valid JSON syntax with double quotes
-"""
+CommandHandler = Callable[[ParsedCommand, CommandContext], Awaitable[None]]
 
 
 class Router:
@@ -67,11 +51,79 @@ class Router:
         self._session_locks: Dict[str, asyncio.Lock] = {}
         self.active_runs: Dict[str, Dict[str, Any]] = {}
         self._interaction_classifier = InteractionClassifier()
+        self._command_dispatcher = CommandDispatcher()
+        self._git_workflow = GitWorkflowService(
+            github_manager=self._github_manager,
+            session_manager=self._session_manager,
+        )
+        self._agent_runner = AgentTaskRunner(
+            config=self._config,
+            session_manager=self._session_manager,
+            interaction_classifier=self._interaction_classifier,
+            git_workflow=self._git_workflow,
+            adapter_cache=self._adapter_cache,
+            active_runs=self.active_runs,
+            send_message=self._send_message,
+        )
+        self._session_commands = SessionCommandHandler(
+            session_manager=self._session_manager,
+            config=self._config,
+            send_message=self._send_message,
+        )
+        self._catalog_commands = CatalogCommandHandler(
+            config=self._config,
+            dispatcher=self._command_dispatcher,
+            send_message=self._send_message,
+        )
+        self._maintenance_commands = MaintenanceCommandHandler(
+            session_manager=self._session_manager,
+            config_loader=lambda: load_config(self._config_root),
+            apply_new_config=self._apply_new_config,
+            get_current_config=lambda: self._config,
+            active_runs=self.active_runs,
+            repo_has_changes=self._git_workflow.repo_has_changes,
+            stash_changes=self._git_workflow.stash_changes,
+            setup_session_branch=self._git_workflow.setup_session_branch,
+            send_message=self._send_message,
+        )
+        self._review_commands = ReviewCommandHandler(
+            session_manager=self._session_manager,
+            github_manager=self._github_manager,
+            build_review_prompt=self._build_review_prompt,
+            execute_agent_task=self._agent_runner.run,
+            send_message=self._send_message,
+        )
+        self._command_handlers: Dict[str, CommandHandler] = {
+            "session.use": self._session_commands.handle_use,
+            "session.end": self._session_commands.handle_end,
+            "session.status": self._session_commands.handle_status,
+            "review.pending": self._review_commands.handle_review,
+            "maintenance.purge": self._maintenance_commands.handle_purge,
+            "catalog.agents": self._catalog_commands.handle_agents,
+            "catalog.models": self._catalog_commands.handle_models,
+            "maintenance.reload_projects": self._maintenance_commands.handle_reload_projects,
+            "maintenance.stash": self._maintenance_commands.handle_stash,
+            "catalog.help": self._catalog_commands.handle_help,
+        }
 
     def bind_adapter(self, adapter: IChatAdapter) -> None:
         """Attach the chat adapter so the router can send replies."""
 
         self._chat_adapter = adapter
+
+    def _apply_new_config(self, new_config: Config) -> None:
+        self._config = new_config
+        self._github_manager.update_token(new_config.github_token)
+        self._adapter_cache.clear()
+        self._session_commands.update_config(new_config)
+        self._catalog_commands.update_config(new_config)
+        self._agent_runner.update_config(new_config)
+
+        if self._chat_adapter and hasattr(self._chat_adapter, "update_allowed_users"):
+            try:
+                self._chat_adapter.update_allowed_users(new_config.slack_allowed_user_ids)
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.warning("Failed to update Slack allowed users during config reload", exc_info=True)
 
     async def handle_message(self, event: Dict[str, Any]) -> None:
         channel_id = event.get("channel")
@@ -91,9 +143,24 @@ class Router:
 
         session, created = self._get_or_create_session(project, channel_id, thread_ts)
 
-        command = parse_command(text) or self._parse_bot_command(text)
+        command = parse_command(text)
+        command_spec: Optional[CommandSpec] = None
         if command:
-            await self._handle_command(command, session, project, channel_id, thread_ts)
+            command_spec = self._command_dispatcher.get_spec(command.name)
+            if not command_spec:
+                await self._send_message(
+                    channel_id,
+                    thread_ts,
+                    f"Unknown command `{command.name}`. Use `!help` to see supported commands.",
+                )
+                return
+        else:
+            command = self._command_dispatcher.parse_bot_command(text)
+            if command:
+                command_spec = self._command_dispatcher.get_spec(command.name)
+
+        if command and command_spec:
+            await self._handle_command(command, command_spec, session, project, channel_id, thread_ts)
             return
 
         if not text:
@@ -147,7 +214,7 @@ class Router:
                 "Send a message with your request, or use `!help` for common commands.",
             )
             try:
-                await self._setup_session_branch(session, project)
+                await self._git_workflow.setup_session_branch(session, project)
             except GitHubError as exc:
                 await self._send_message(
                     channel_id,
@@ -163,609 +230,30 @@ class Router:
                 )
             return
 
-        await self._execute_agent_task(session, project, channel_id, thread_ts, user_text)
-
-    async def _execute_agent_task(
-        self,
-        session: Session,
-        project: Project,
-        channel_id: str,
-        thread_ts: str,
-        user_text: str,
-    ) -> None:
-        agent = self._config.get_agent(session.active_agent_id)
-        adapter = self._get_adapter(agent)
-
-        await self._send_message(
-            channel_id,
-            thread_ts,
-            f"Message received — running `{agent.id}` now.",
-        )
-
-        history_snapshot = self._session_manager.get_conversation_history(session.id)
-        adapter_history = self._format_history_for_adapter(history_snapshot)
-
-        # Get formatted context from interactions (with summaries if applicable)
-        interaction_context = self._session_manager.get_context_for_agent(session.id)
-
-        task_text = self._build_task_text(interaction_context, user_text)
-
-        self._session_manager.append_user_message(session.id, user_text)
-
-        # Track this run for potential cancellation via !purge
-        run_id = f"{channel_id}_{thread_ts}_{int(time.time() * 1000)}"
-        run_task = asyncio.current_task()
-        self.active_runs[run_id] = {
-            "task": run_task,
-            "session_id": str(session.id),
-            "agent_id": agent.id,
-            "started_at": time.time(),
-        }
-
-        try:
-                result = await adapter.run(
-                    task_text=task_text,
-                    project_path=str(session.project_path),
-                    session_id=str(session.id),
-                    conversation_history=adapter_history,
-                    model=session.active_model,
-                )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            LOGGER.exception("Adapter %s failed with model %s", agent.id, session.active_model)
-
-            # Try fallback to default model if we're not already using it
-            default_model = agent.models.get("default") if agent.models else None
-            if session.active_model and default_model and session.active_model != default_model:
-                LOGGER.info("Retrying %s with default model %s", agent.id, default_model)
-                await self._send_message(
-                    channel_id,
-                    thread_ts,
-                    f"Failed with model `{session.active_model}`. Retrying with default model `{default_model}`...",
-                )
-                try:
-                    result = await adapter.run(
-                        task_text=task_text,
-                        project_path=str(session.project_path),
-                        session_id=str(session.id),
-                        conversation_history=adapter_history,
-                        model=default_model,
-                    )
-
-                    self._session_manager.set_active_agent(
-                        session.id,
-                        agent.id,
-                        agent.type,
-                        default_model,
-                    )
-                    LOGGER.info("Fallback to default model succeeded for session %s", session.id)
-                except Exception as fallback_exc:
-                    LOGGER.exception("Fallback to default model also failed")
-                    await self._send_message(
-                        channel_id,
-                        thread_ts,
-                        f"Failed to run `{agent.id}` with both `{session.active_model}` and default model `{default_model}`: {fallback_exc}",
-                    )
-                    return
-            else:
-                # No fallback available or already using default
-                await self._send_message(
-                    channel_id,
-                    thread_ts,
-                    f"Failed to run `{agent.id}`: {exc}",
-                )
-                return
-        finally:
-            # Always clean up the run tracking
-            self.active_runs.pop(run_id, None)
-
-        if result.structured_output:
-            self._session_manager.update_session_context(
-                session.id,
-                {
-                    "pr_title": result.structured_output.pr_title,
-                    "pr_summary": result.structured_output.pr_summary,
-                },
-            )
-
-        response_text = (
-            result.structured_output.slack_message
-            if result.structured_output
-            else result.output_text or "Agent completed with no textual output."
-        )
-
-        if result.errors:
-            response_text = f"{response_text}\n\nErrors:\n" + "\n".join(result.errors)
-
-        if result.file_edits and not result.structured_output:
-            edits_summary = ", ".join({edit.path for edit in result.file_edits})
-            response_text = f"{response_text}\n\nDetected file edits: {edits_summary}"
-
-        # Track interaction for context passing in future requests
-        user_message = ConversationMessage(role="user", content=user_text)
-        self._session_manager.append_interaction(
-            session.id,
-            user_message=user_message,
-            agent_result=result,
-            classifier=self._interaction_classifier,
-        )
-
-        self._session_manager.append_agent_message(session.id, response_text)
-        self._session_manager.update_session_context(session.id, result.session_context)
-
-        pr_message = await self._maybe_publish_code_changes(session, project, result)
-        if pr_message:
-            response_text = f"{response_text}\n\n{pr_message}"
-
-        await self._send_message(channel_id, thread_ts, response_text)
-
-    def _parse_bot_command(self, text: str) -> Optional[ParsedCommand]:
-        normalized = text.strip()
-        normalized = MENTION_PREFIX.sub("", normalized, count=1)
-        if normalized.lower().startswith("@remote-coder"):
-            normalized = normalized[len("@remote-coder") :].strip()
-        if normalized.lower().startswith("remote-coder"):
-            normalized = normalized[len("remote-coder") :].strip()
-        if not normalized:
-            return None
-        parts = normalized.split()
-        if not parts:
-            return None
-        name = parts[0].lower()
-        if name in {
-            "use",
-            "status",
-            "end",
-            "review",
-            "help",
-            "commands",
-            "purge",
-            "agents",
-            "models",
-            "reload-projects",
-        }:
-            return ParsedCommand(name=name, args=parts[1:])
-        return None
+        await self._agent_runner.run(session, project, channel_id, thread_ts, user_text)
 
     async def _handle_command(
         self,
         command: ParsedCommand,
+        spec: CommandSpec,
         session: Session,
         project: Project,
         channel_id: str,
         thread_ts: str,
     ) -> None:
-        if command.name == "use":
-            await self._command_switch_agent(command, session, channel_id, thread_ts)
-        elif command.name == "end":
-            await self._command_end_session(session, channel_id, thread_ts)
-        elif command.name == "status":
-            await self._command_status(session, channel_id, thread_ts)
-        elif command.name == "review":
-            await self._command_review(session, project, channel_id, thread_ts)
-        elif command.name == "purge":
-            await self._command_purge(channel_id, thread_ts)
-        elif command.name == "agents":
-            await self._command_agents(channel_id, thread_ts)
-        elif command.name == "models":
-            await self._command_models(channel_id, thread_ts)
-        elif command.name == "reload-projects":
-            await self._command_reload_projects(channel_id, thread_ts)
-        elif command.name in {"help", "commands"}:
-            await self._command_help(channel_id, thread_ts)
-        else:
-            await self._send_message(channel_id, thread_ts, f"Unknown command `{command.name}`")
-
-    async def _command_switch_agent(
-        self,
-        command: ParsedCommand,
-        session: Session,
-        channel: str,
-        thread_ts: str,
-    ) -> None:
-        LOGGER.info("Executing !use command in channel %s, thread %s", channel, thread_ts)
-        if not command.args:
-            await self._send_message(channel, thread_ts, "Usage: `!use <agent> [model]`")
+        handler = self._command_handlers.get(spec.handler_id)
+        if not handler:
+            LOGGER.error("No handler registered for command %s (%s)", command.name, spec.handler_id)
+            await self._send_message(channel_id, thread_ts, f"No handler found for `{command.name}`.")
             return
-
-        agent_id = command.args[0].lower()
-        model = command.args[1].lower() if len(command.args) > 1 else None
-
-        try:
-            agent = self._config.get_agent(agent_id)
-        except AgentNotFound:
-            await self._send_message(channel, thread_ts, f"Unknown agent `{agent_id}`")
-            return
-
-        if model:
-            available_models = agent.models.get("available", [])
-            if model not in available_models:
-                await self._send_message(
-                    channel,
-                    thread_ts,
-                    f"Unknown model `{model}` for agent `{agent_id}`. Available: {', '.join(available_models)}",
-                )
-                return
-
-        # If no model specified, use default
-        if not model and agent.models:
-            model = agent.models.get("default")
-
-        self._session_manager.set_active_agent(session.id, agent_id, agent.type, model)
-        LOGGER.info("Switched session %s to agent %s model %s", session.id, agent_id, model)
-
-        model_display = f" `{model}`" if model else ""
-        await self._send_message(channel, thread_ts, f"Switched to `{agent_id}`{model_display}")
-
-    async def _command_end_session(self, session: Session, channel: str, thread_ts: str) -> None:
-        LOGGER.info("Executing !end command in channel %s, thread %s", channel, thread_ts)
-        if session.status == SessionStatus.ENDED:
-            await self._send_message(channel, thread_ts, "Session already ended.")
-            return
-        self._session_manager.update_status(session.id, SessionStatus.ENDED)
-        LOGGER.info("Ended session %s", session.id)
-        await self._send_message(channel, thread_ts, "Session ended. Start a new thread to begin again.")
-
-    async def _command_status(self, session: Session, channel: str, thread_ts: str) -> None:
-        LOGGER.debug("Executing !status command in channel %s, thread %s", channel, thread_ts)
-        history = self._session_manager.get_conversation_history(session.id)
-        status_lines = [
-            f"Session ID: `{session.id}`",
-            f"Project: `{session.project_id}`",
-            f"Active agent: `{session.active_agent_id}` ({session.active_agent_type.value})",
-            f"Messages stored: {len(history)}",
-            f"Status: {session.status.value}",
-        ]
-        await self._send_message(channel, thread_ts, "\n".join(status_lines))
-
-    async def _command_help(self, channel: str, thread_ts: str) -> None:
-        lines = [
-            "Available commands:",
-            "- `!use <agent> [model]` – Switch to a different agent and optionally specify model.",
-            "- `!status` – Show session, active agent, and history count.",
-            "- `!review` – List unresolved GitHub review comments for this session's PR.",
-            "- `!end` – End the session (start a new Slack thread to reset).",
-            "- `!purge` – Cancel all running agent tasks and clear all sessions.",
-            "- `!agents` – List all configured coding agents.",
-            "- `!models` – List all available models for each agent.",
-            "- `!help` – Show this command list.",
-            "",
-            "Send any other message to run the current agent once with that request.",
-        ]
-        await self._send_message(channel, thread_ts, "\n".join(lines))
-
-    async def _command_agents(self, channel: str, thread_ts: str) -> None:
-        """List all configured agents."""
-        agent_lines = ["Available agents:"]
-        for _, agent in self._config.agents.items():
-            agent_lines.append(f"- `{agent.type.value}`")
-        await self._send_message(channel, thread_ts, "\n".join(agent_lines))
-
-    async def _command_models(self, channel: str, thread_ts: str) -> None:
-        """List all available models for all agents."""
-        lines = ["Available models by agent:"]
-        for agent_id, agent in self._config.agents.items():
-            if agent.models:
-                default = agent.models.get("default", "")
-                available = agent.models.get("available", [])
-                if available:
-                    models_str = ", ".join(f"`{m}`" for m in available)
-                    default_marker = f" (default: `{default}`)" if default else ""
-                    lines.append(f"- `{agent_id}`: {models_str}{default_marker}")
-                else:
-                    lines.append(f"- `{agent_id}`: No models configured")
-            else:
-                lines.append(f"- `{agent_id}`: No models configured")
-        await self._send_message(channel, thread_ts, "\n".join(lines))
-
-    async def _command_reload_projects(self, channel: str, thread_ts: str) -> None:
-        """Reload configuration files without restarting the daemon."""
-        LOGGER.info("Executing !reload-projects command")
-        try:
-            new_config = load_config(self._config_root)
-        except ConfigError as exc:
-            await self._send_message(channel, thread_ts, f"Failed to reload config: {exc}")
-            return
-
-        old_config = self._config
-        self._config = new_config
-        self._github_manager.update_token(new_config.github_token)
-        self._adapter_cache.clear()
-
-        if self._chat_adapter and hasattr(self._chat_adapter, "update_allowed_users"):
-            try:
-                self._chat_adapter.update_allowed_users(new_config.slack_allowed_user_ids)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.warning("Failed to update Slack allowed users during config reload", exc_info=True)
-
-        slack_restart_note = ""
-        if (
-            old_config.slack_bot_token != new_config.slack_bot_token
-            or old_config.slack_app_token != new_config.slack_app_token
-        ):
-            slack_restart_note = " (Slack tokens changed; restart the daemon for changes to take effect.)"
-
-        await self._send_message(
-            channel,
-            thread_ts,
-            f"Reloaded configuration: {len(new_config.projects)} project(s), {len(new_config.agents)} agent(s)."
-            f"{slack_restart_note}",
-        )
-
-    async def _command_purge(self, channel: str, thread_ts: str) -> None:
-        """Cancel all active agent runs and clear all sessions."""
-        LOGGER.info("Executing !purge command in channel %s, thread %s", channel, thread_ts)
-
-        # Cancel all active runs
-        num_cancelled = 0
-        if self.active_runs:
-            LOGGER.info("Cancelling %d active agent run(s)", len(self.active_runs))
-            tasks_to_cancel = []
-            for run_info in list(self.active_runs.values()):
-                task = run_info.get("task")
-                if task and not task.done():
-                    task.cancel()
-                    tasks_to_cancel.append(task)
-
-            # Wait for all cancellations to complete
-            if tasks_to_cancel:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-            num_cancelled = len(self.active_runs)
-            self.active_runs.clear()
-        else:
-            LOGGER.info("No active agent runs to cancel")
-
-        # Clear all sessions
-        num_sessions = len(self._session_manager._sessions)
-        if num_sessions > 0:
-            LOGGER.info("Clearing %d session(s)", num_sessions)
-            self._session_manager._sessions.clear()
-            self._session_manager._thread_index.clear()
-            self._session_manager._pr_refs.clear()
-        else:
-            LOGGER.info("No sessions to clear")
-
-        # Send confirmation
-        if num_cancelled > 0 or num_sessions > 0:
-            message = f"Stopped {num_cancelled} running agent task(s) and cleared {num_sessions} session(s). Remote Coder is now in a clean state."
-        else:
-            message = "No active agent tasks. All sessions cleared. Remote Coder is in a clean state."
-
-        LOGGER.info("Purge completed: cancelled %d task(s), cleared %d session(s)", num_cancelled, num_sessions)
-        await self._send_message(channel, thread_ts, message)
-
-    async def _command_review(
-        self,
-        session: Session,
-        project: Project,
-        channel: str,
-        thread_ts: str,
-    ) -> None:
-        LOGGER.info("Executing !review command in channel %s, thread %s", channel, thread_ts)
-        if not project.github:
-            await self._send_message(channel, thread_ts, "This project has no GitHub configuration.")
-            return
-        if not self._github_manager.is_configured():
-            await self._send_message(channel, thread_ts, "GitHub token is not configured; cannot fetch PR comments.")
-            return
-
-        try:
-            pr_ref = self._session_manager.get_pr_ref(session.id)
-        except SessionNotFound:
-            await self._send_message(channel, thread_ts, "No pull request exists yet for this session.")
-            return
-
-        try:
-            comments = await self._github_manager.get_unresolved_comments(project, pr_ref.number)
-        except GitHubError as exc:
-            await self._send_message(channel, thread_ts, f"Unable to fetch PR comments: {exc}")
-            return
-
-        if not comments:
-            await self._send_message(channel, thread_ts, f"No unresolved review threads on {pr_ref.url}")
-            return
-
-        lines = [f"Unresolved review comments for {pr_ref.url}:"]
-        for comment in comments[:10]:
-            location = ""
-            if comment.path:
-                location = f" `{comment.path}`"
-                if comment.position:
-                    location += f" (line {comment.position})"
-            snippet = comment.body.strip().replace("\n", " ")
-            if len(snippet) > 300:
-                snippet = snippet[:297] + "..."
-            lines.append(f"- {comment.author}{location}: {snippet}\n  {comment.url}")
-
-        if len(comments) > 10:
-            lines.append(f"...and {len(comments) - 10} more comments.")
-        summary_text = "\n".join(lines)
-        await self._send_message(channel, thread_ts, summary_text)
-
-        prompt = self._build_review_prompt(pr_ref.url, comments)
-        await self._execute_agent_task(session, project, channel, thread_ts, prompt)
-
-    def _build_task_text(self, context: str, user_text: str) -> str:
-        """
-        Build task text with context and current user request.
-
-        Args:
-            context: Formatted context from interactions (may include summaries)
-            user_text: The current user request
-
-        Returns:
-            Complete task text ready for agent execution
-        """
-        context_block = context if context else "No prior conversation."
-        return (
-            f"{CODE_TASK_WRAPPER}\n\n"
-            f"## CONTEXT ON THE WORK SO FAR:\n{context_block}\n\n"
-            f"CURRENT ASK:\nUSER:\n{user_text}\n"
-            "Provide your answer below. If you changed code, summarize the edits and tests you ran."
-        )
-
-    def _format_history_for_adapter(self, history: Sequence) -> list[Dict[str, str]]:
-        formatted: list[Dict[str, str]] = []
-        for msg in history:
-            formatted.append(
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp.isoformat(),
-                }
-            )
-        return formatted
-
-    async def _maybe_publish_code_changes(
-        self,
-        session: Session,
-        project: Project,
-        result: AgentResult,
-    ) -> Optional[str]:
-        if not project.github or not self._github_manager.is_configured():
-            LOGGER.debug("Skipping PR creation: no GitHub config")
-            return None
-
-        # Check for actual file changes via git status and agent-reported edits
-        repo_path = session.project_path
-        has_changes = bool(result.file_edits)
-        if not has_changes:
-            has_changes = await self._repo_has_changes(repo_path)
-
-        if not has_changes:
-            LOGGER.info("No file changes detected - skipping commit/push")
-            return None
-
-        # Log structured output if available (for debugging)
-        if result.structured_output:
-            LOGGER.info(
-                "Structured output present: pr_title=%s, summary_items=%d",
-                result.structured_output.pr_title,
-                len(result.structured_output.pr_summary),
-            )
-
-        LOGGER.info("Changes detected - proceeding with commit and push")
-        try:
-            return await self._publish_branch_update(session, project)
-        except GitHubError as exc:
-            LOGGER.exception("GitHub workflow failed for session %s", session.id)
-            return f"GitHub integration failed: {exc}"
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or exc.stdout or str(exc)).strip()
-            LOGGER.exception("Git command failed for session %s", session.id)
-            message = detail or "Unknown git error."
-            return f"Git command failed while preparing PR: {message}"
-
-    async def _setup_session_branch(self, session: Session, project: Project) -> None:
-        if not project.github:
-            return
-        branch = f"remote-coder-{session.id}"
-        repo_path = session.project_path
-        rev_parse = await self._run_git(repo_path, ["rev-parse", "--verify", branch], check=False)
-        if rev_parse.returncode == 0:
-            await self._run_git(repo_path, ["checkout", branch])
-            return
-
-        base = project.github.default_base_branch
-        await self._prepare_base_branch(repo_path, base, require_clean=True)
-        await self._run_git(repo_path, ["checkout", "-B", branch, base])
-
-    async def _publish_branch_update(self, session: Session, project: Project) -> Optional[str]:
-        branch = f"remote-coder-{session.id}"
-        await self._ensure_branch(session.project_path, project, branch)
-        await self._run_git(session.project_path, ["add", "-A"])
-        if not await self._commit_changes(session.project_path, session):
-            return None
-        await self._run_git(session.project_path, ["push", "-u", "origin", branch])
-
-        existing_pr_number = self._get_existing_pr_number(session.id)
-        pr_title = self._get_session_pr_title(session)
-
-        # Build PR body with summary if available
-        pr_summary = session.session_context.get("pr_summary", [])
-        if pr_summary and isinstance(pr_summary, list):
-            summary_text = "\n".join(f"- {item}" for item in pr_summary)
-            body = f"{summary_text}\n\n---\nAutomated changes via Slack thread {session.thread_ts} in channel {session.channel_id}."
-        else:
-            body = f"Automated changes requested via Slack thread {session.thread_ts} in channel {session.channel_id}."
-
-        options = EnsurePROptions(
-            title=pr_title,
-            body=body,
-        )
-        pr_ref = await self._github_manager.ensure_pull_request(
+        context = CommandContext(
+            session=session,
             project=project,
-            session_id=session.id,
-            branch=branch,
-            options=options,
-            existing_number=existing_pr_number,
+            channel=channel_id,
+            thread_ts=thread_ts,
         )
-        self._session_manager.set_pr_ref(pr_ref)
-        return f"Pushed updates to branch `{branch}`\nLinked PR: {pr_ref.url}"
+        await handler(command, context)
 
-    async def _repo_has_changes(self, repo_path: Path) -> bool:
-        result = await self._run_git(repo_path, ["status", "--porcelain"])
-        return bool(result.stdout.strip())
-
-    async def _ensure_branch(self, repo_path: Path, project: Project, branch: str) -> None:
-        # Check if branch exists locally
-        rev_parse = await self._run_git(repo_path, ["rev-parse", "--verify", branch], check=False)
-        if rev_parse.returncode == 0:
-            await self._run_git(repo_path, ["checkout", branch])
-            return
-
-        base = project.github.default_base_branch if project.github else "main"
-        dirty = await self._repo_has_changes(repo_path)
-        if dirty:
-            # Create the branch from the current HEAD (which already has the desired changes).
-            await self._run_git(repo_path, ["checkout", "-b", branch])
-            return
-
-        await self._prepare_base_branch(repo_path, base)
-        await self._run_git(repo_path, ["checkout", "-B", branch, base])
-
-    async def _commit_changes(self, repo_path: Path, session: Session) -> bool:
-        message = self._get_session_pr_title(session)
-        try:
-            await self._run_git(repo_path, ["commit", "-m", message])
-            return True
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").lower()
-            if "nothing to commit" in stderr:
-                return False
-            raise
-
-    def _get_existing_pr_number(self, session_id: UUID) -> Optional[int]:
-        try:
-            pr_ref = self._session_manager.get_pr_ref(session_id)
-            return pr_ref.number
-        except SessionNotFound:
-            return None
-
-    async def _run_git(self, cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-        def _execute() -> subprocess.CompletedProcess:
-            return subprocess.run(
-                ["git", *args],
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                check=check,
-            )
-
-        return await asyncio.to_thread(_execute)
-
-    async def _prepare_base_branch(self, repo_path: Path, base: str, require_clean: bool = False) -> None:
-        if require_clean and await self._repo_has_changes(repo_path):
-            raise GitHubError(
-                "Working tree has local changes. Commit or stash them before starting a new session."
-            )
-        await self._run_git(repo_path, ["fetch", "origin", base])
-        show_ref = await self._run_git(repo_path, ["show-ref", "--verify", f"refs/heads/{base}"], check=False)
-        if show_ref.returncode != 0:
-            await self._run_git(repo_path, ["checkout", "-B", base, f"origin/{base}"])
-        else:
-            await self._run_git(repo_path, ["checkout", base])
-            await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
 
     def _build_review_prompt(self, pr_url: str, comments: list[PRComment]) -> str:
         lines = [
@@ -791,24 +279,6 @@ class Router:
         if isinstance(context_title, str) and context_title.strip():
             return context_title.strip()
         return f"Remote Coder updates for session {session.id}"
-
-    def _get_adapter(self, agent: Agent) -> AgentAdapter:
-        cached = self._adapter_cache.get(agent.id)
-        if cached:
-            return cached
-
-        adapter = self._build_adapter(agent)
-        self._adapter_cache[agent.id] = adapter
-        return adapter
-
-    def _build_adapter(self, agent: Agent) -> AgentAdapter:
-        if agent.type == AgentType.CLAUDE:
-            return ClaudeAdapter(agent)
-        if agent.type == AgentType.CODEX:
-            return CodexAdapter(agent)
-        if agent.type == AgentType.GEMINI:
-            return GeminiAdapter(agent)
-        raise ValueError(f"No adapter available for agent type {agent.type}")
 
     def _get_session_lock(self, session_key: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_key)

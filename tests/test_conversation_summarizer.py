@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.core.conversation_summarizer import ConversationSummarizer
+from src.core.conversation import ConversationSummarizer
 from src.core.models import ConversationInteraction, ConversationMessage
 
 

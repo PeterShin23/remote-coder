@@ -8,14 +8,14 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Dict, Sequence, Tuple
 from uuid import UUID
 
-from .errors import SessionNotFound
+from ..errors import SessionNotFound
 
 if TYPE_CHECKING:
     from src.agent_adapters.base import AgentResult
-from .interaction_classifier import InteractionClassifier
-from .conversation_summarizer import ConversationSummarizer
+from .classifier import InteractionClassifier
+from .summarizer import ConversationSummarizer
 from .context_builder import ContextBuilder
-from .models import (
+from ..models import (
     AgentType,
     ConversationInteraction,
     ConversationMessage,
@@ -148,6 +148,15 @@ class SessionManager:
                 self._pr_refs.pop(sid, None)
             self._thread_index = {k: v for k, v in self._thread_index.items() if v not in to_remove}
         return len(to_remove)
+
+    def clear_all(self) -> int:
+        """Remove all sessions and associated references."""
+        with self._lock:
+            count = len(self._sessions)
+            self._sessions.clear()
+            self._thread_index.clear()
+            self._pr_refs.clear()
+        return count
 
     def append_interaction(
         self,
