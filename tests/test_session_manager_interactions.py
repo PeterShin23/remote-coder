@@ -3,7 +3,7 @@
 import pytest
 
 from src.agent_adapters.base import AgentResult, FileEdit
-from src.core.interaction_classifier import InteractionClassifier
+from src.core.conversation import InteractionClassifier, SessionManager
 from src.core.models import (
     Agent,
     AgentType,
@@ -11,7 +11,6 @@ from src.core.models import (
     Project,
     WorkingDirMode,
 )
-from src.core.session_manager import SessionManager
 from pathlib import Path
 
 

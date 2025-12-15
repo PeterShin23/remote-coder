@@ -3,7 +3,7 @@
 import pytest
 
 from src.agent_adapters.base import AgentResult, FileEdit
-from src.core.interaction_classifier import InteractionClassifier
+from src.core.conversation import InteractionClassifier
 
 
 class TestInteractionClassifier:

@@ -74,7 +74,8 @@ Recommended workflow: keep `main` stable; test from a feature branch using `@bra
 
 ## Tests and linting
 
-- **Unit tests:** `uv run pytest`
+- Install dev tools once: `uv pip install -e ".[dev]"`
+- **Unit tests:** `uv run pytest -v -s` (use `uv run pytest tests/commands -v -s` to focus on Slack command coverage)
 - **Linting/format:** `uv run ruff check .`
 
 Please run both before opening a pull request. If you add new behavior, include targeted unit tests when possible.

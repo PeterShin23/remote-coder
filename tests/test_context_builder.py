@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.core.context_builder import ContextBuilder
+from src.core.conversation import ContextBuilder
 from src.core.models import ConversationInteraction, ConversationMessage
 
 
@@ -85,8 +85,9 @@ class TestContextBuilder:
 
         # Should NOT have early interactions (1-5) as individual interactions
         # (they're in the summary instead)
-        assert "Request 1" not in context
-        assert context.count("Request") == 5  # Only requests 6-10
+        assert "USER:\nRequest 1\nAGENT:\nResponse 1" not in context
+        assert "USER:\nRequest 2\nAGENT:\nResponse 2" not in context
+        assert context.count("USER:") == 5  # Only requests 6-10
 
     def test_format_interaction_pair(self):
         """Format a single interaction pair correctly."""
