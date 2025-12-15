@@ -19,7 +19,7 @@ class TestMaintenanceCommands:
     @pytest.fixture
     def git_ops(self):
         return {
-            "repo_has_changes": AsyncMock(return_value=True),
+            "_repo_has_changes": AsyncMock(return_value=True),
             "stash_changes": AsyncMock(return_value=True),
             "setup_session_branch": AsyncMock(),
         }
@@ -34,7 +34,7 @@ class TestMaintenanceCommands:
             apply_new_config=apply_mock,
             get_current_config=lambda: test_config,
             active_runs={},
-            repo_has_changes=git_ops["repo_has_changes"],
+            _repo_has_changes=git_ops["_repo_has_changes"],
             stash_changes=git_ops["stash_changes"],
             setup_session_branch=git_ops["setup_session_branch"],
             send_message=mock_send_message,
@@ -99,7 +99,7 @@ class TestMaintenanceCommands:
 
     @pytest.mark.asyncio
     async def test_handle_stash_no_changes(self, handler, command_context, git_ops, mock_send_message):
-        git_ops["repo_has_changes"].return_value = False
+        git_ops["_repo_has_changes"].return_value = False
         command = ParsedCommand(name="stash", args=[])
 
         await handler.handle_stash(command, command_context)

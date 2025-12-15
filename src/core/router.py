@@ -81,7 +81,7 @@ class Router:
             apply_new_config=self._apply_new_config,
             get_current_config=lambda: self._config,
             active_runs=self.active_runs,
-            repo_has_changes=self._git_workflow.repo_has_changes,
+            _repo_has_changes=self._git_workflow._repo_has_changes,
             stash_changes=self._git_workflow.stash_changes,
             setup_session_branch=self._git_workflow.setup_session_branch,
             send_message=self._send_message,

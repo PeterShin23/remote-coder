@@ -96,7 +96,7 @@ class GitWorkflowService:
         )
         return True
 
-    async def repo_has_changes(self, repo_path: Path) -> bool:
+    async def _repo_has_changes(self, repo_path: Path) -> bool:
         result = await self._run_git(repo_path, ["status", "--porcelain"])
         return bool(result.stdout.strip())
 

@@ -37,7 +37,7 @@ class MaintenanceCommandHandler(BaseCommandHandler):
         apply_new_config: ApplyConfigFn,
         get_current_config: Callable[[], Config],
         active_runs: Dict[str, Dict[str, object]],
-        repo_has_changes: HasChangesFn,
+        _repo_has_changes: HasChangesFn,
         stash_changes: StashFn,
         setup_session_branch: SetupBranchFn,
         send_message,
@@ -48,7 +48,7 @@ class MaintenanceCommandHandler(BaseCommandHandler):
         self._apply_new_config = apply_new_config
         self._get_current_config = get_current_config
         self._active_runs = active_runs
-        self._repo_has_changes = repo_has_changes
+        self._repo_has_changes = _repo_has_changes
         self._stash_changes = stash_changes
         self._setup_session_branch = setup_session_branch
 
@@ -117,8 +117,8 @@ class MaintenanceCommandHandler(BaseCommandHandler):
     async def handle_stash(self, command: ParsedCommand, context: CommandContext) -> None:
         LOGGER.info("Executing !stash command in channel %s, thread %s", context.channel, context.thread_ts)
 
-        repo_has_changes = await self._repo_has_changes(context.project.path)
-        if not repo_has_changes:
+        _repo_has_changes = await self._repo_has_changes(context.project.path)
+        if not _repo_has_changes:
             await self._reply(context, "No local changes to stash.")
             return
 
