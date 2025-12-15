@@ -231,3 +231,5 @@ When an agent edits files in a session, Remote Coder creates (or reuses) a branc
 ## Personal Notes
 
 1. Using Gemini CLI is kinda slow for some reason. Recommending you use the actual paid stuff first until you hit the limits first like claude code and codex cli before using gemini. Just my opinion. Do what you want.
+
+<!-- hi -->
