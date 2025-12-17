@@ -35,3 +35,8 @@ class SlackError(RemoteCoderError):
 
 class GitHubError(RemoteCoderError):
     pass
+
+
+class ProjectCreationError(RemoteCoderError):
+    """Raised when project creation fails."""
+    pass

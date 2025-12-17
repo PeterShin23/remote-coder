@@ -18,6 +18,7 @@ from .commands.catalog import CatalogCommandHandler
 from .commands.context import CommandContext
 from .commands.dispatcher import CommandDispatcher
 from .commands.maintenance import MaintenanceCommandHandler
+from .commands.project_creation import ProjectCreationHandler
 from .commands.registry import CommandSpec
 from .commands.review import ReviewCommandHandler
 from .commands.session import SessionCommandHandler
@@ -52,6 +53,11 @@ class Router:
         self.active_runs: Dict[str, Dict[str, Any]] = {}
         self._interaction_classifier = InteractionClassifier()
         self._command_dispatcher = CommandDispatcher()
+        self._project_creation_handler = ProjectCreationHandler(
+            config=self._config,
+            github_manager=self._github_manager,
+            config_root=self._config_root,
+        )
         self._git_workflow = GitWorkflowService(
             github_manager=self._github_manager,
             session_manager=self._session_manager,
@@ -118,6 +124,7 @@ class Router:
         self._session_commands.update_config(new_config)
         self._catalog_commands.update_config(new_config)
         self._agent_runner.update_config(new_config)
+        self._project_creation_handler.update_config(new_config)
 
         if self._chat_adapter and hasattr(self._chat_adapter, "update_allowed_users"):
             try:
@@ -135,10 +142,22 @@ class Router:
             LOGGER.debug("Ignoring Slack event missing channel or thread")
             return
 
+        # Check if this is a response to a pending project creation prompt
+        was_handled, new_config = await self._project_creation_handler.handle_response(
+            channel_id, text, self._send_message
+        )
+        if was_handled:
+            if new_config:
+                self._apply_new_config(new_config)
+            return
+
         try:
             project = self._config.get_project_by_channel(channel_lookup)
         except ProjectNotFound:
             LOGGER.warning("No project mapping for channel %s", channel_lookup)
+            await self._project_creation_handler.handle_missing_project(
+                channel_id, channel_lookup, thread_ts, self._send_message
+            )
             return
 
         session, created = self._get_or_create_session(project, channel_id, thread_ts)
@@ -287,8 +306,12 @@ class Router:
             self._session_locks[session_key] = lock
         return lock
 
-    async def _send_message(self, channel: str, thread_ts: str, text: str) -> None:
+    async def _send_message(
+        self, channel: str, thread_ts: str, text: str
+    ) -> Optional[str]:
         if not self._chat_adapter:
             LOGGER.warning("Chat adapter not bound; dropping message: %s", text)
-            return
-        await self._chat_adapter.send_message(channel=channel, thread_ts=thread_ts, text=text)
+            return None
+        return await self._chat_adapter.send_message(
+            channel=channel, thread_ts=thread_ts, text=text
+        )
