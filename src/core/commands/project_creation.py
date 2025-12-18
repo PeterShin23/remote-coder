@@ -79,8 +79,9 @@ class ProjectCreationHandler:
         await send_message(
             channel_id,
             thread_ts,
-            f"I couldn't find a project named `{channel_name}`. Is this a new idea?!?!\n\n"
-            "Reply with \"Y\" to create it, or \"N\" to cancel.",
+            f"I couldn't find a project named `{channel_name}`. "
+            "Is this a new idea, or something that already exists on your computer?\n\n"
+            "Reply with \"Y\" to set it up, or \"N\" to cancel.",
         )
 
         # Track pending creation
@@ -246,11 +247,11 @@ class ProjectCreationHandler:
         Returns:
             New Config if successful, None on failure
         """
-        model_str = f"/{model}" if model else ""
+        model_str = f" {model}" if model else ""
         await send_message(
             pending.channel_id,
             pending.thread_ts,
-            f"Creating project `{pending.channel_name}` with `{agent_id} {model_str}`...",
+            f"Setting up project `{pending.channel_name}` with `{agent_id}{model_str}`...",
         )
 
         try:
@@ -268,8 +269,7 @@ class ProjectCreationHandler:
             await send_message(
                 pending.channel_id,
                 pending.thread_ts,
-                f"Okay great, I've set up `{pending.channel_name}`! "
-                "What's this new idea? What do you want me to do?",
+                f"Okay great, I've set up `{pending.channel_name}`! What do you want me to do?",
             )
 
             return new_config

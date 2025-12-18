@@ -242,7 +242,7 @@ class TestRouterYesNoHandling:
 
             mock_create.assert_called_once()
 
-        assert any("Creating project" in msg["text"] for msg in adapter.messages)
+        assert any("Setting up project" in msg["text"] for msg in adapter.messages)
         assert any("I've set up" in msg["text"] for msg in adapter.messages)
         assert "C123" not in router._project_creation_handler._pending_projects
 
