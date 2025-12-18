@@ -323,8 +323,17 @@ class TestProjectCreationService:
     async def test_create_project_cleanup_on_failure(
         self, test_config, mock_github_manager
     ):
-        """Test that failed creation cleans up local directory."""
+        """Test that failed creation cleans up local directory and GitHub repo."""
         service = ProjectCreationService(test_config, mock_github_manager)
+
+        # Update mock to return correct repo name for this test
+        mock_created_repo = MagicMock()
+        mock_created_repo.full_name = "test-user/failed-project"
+        mock_github_manager._client.get_user().create_repo.return_value = mock_created_repo
+
+        # Set up mock for repo deletion
+        mock_repo_to_delete = MagicMock()
+        mock_github_manager._client.get_repo.return_value = mock_repo_to_delete
 
         # Mock git init to succeed but push to fail
         call_count = 0
@@ -348,6 +357,10 @@ class TestProjectCreationService:
             # Verify local directory was cleaned up
             assert not (test_config.base_dir / "failed-project").exists()
 
+            # Verify GitHub repo deletion was attempted
+            mock_github_manager._client.get_repo.assert_called_with("test-user/failed-project")
+            mock_repo_to_delete.delete.assert_called_once()
+
     def test_update_config(self, test_config, mock_github_manager):
         """Test that update_config updates the internal config reference."""
         service = ProjectCreationService(test_config, mock_github_manager)
@@ -356,3 +369,29 @@ class TestProjectCreationService:
         service.update_config(new_config)
 
         assert service._config is new_config
+
+    def test_get_authenticated_remote_url_with_token(self, test_config, mock_github_manager):
+        """Test that authenticated URL uses HTTPS with token."""
+        service = ProjectCreationService(test_config, mock_github_manager)
+
+        url = service._get_authenticated_remote_url("owner/repo")
+
+        assert url == "https://x-access-token:test-token@github.com/owner/repo.git"
+
+    def test_get_authenticated_remote_url_without_token(self, mock_github_manager):
+        """Test that without token, falls back to SSH."""
+        config = Config(
+            projects={},
+            agents={},
+            slack_bot_token="bot",
+            slack_app_token="app",
+            slack_allowed_user_ids=["U123"],
+            base_dir=Path("/tmp"),
+            config_dir=Path("/tmp"),
+            github_token=None,  # No token
+        )
+        service = ProjectCreationService(config, mock_github_manager)
+
+        url = service._get_authenticated_remote_url("owner/repo")
+
+        assert url == "git@github.com:owner/repo.git"

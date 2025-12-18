@@ -154,6 +154,7 @@ class ProjectCreationService:
         request: ProjectCreationRequest,
     ) -> Project:
         """Create a completely new project with GitHub repo."""
+        repo_full_name: Optional[str] = None
         try:
             github_owner = await self._get_github_owner()
 
@@ -175,11 +176,15 @@ class ProjectCreationService:
             )
             LOGGER.info("Created initial commit")
 
-            remote_url = f"git@github.com:{repo_full_name}.git"
+            # Use HTTPS with token auth instead of SSH for reliability
+            remote_url = self._get_authenticated_remote_url(repo_full_name)
             await self._push_to_github(
                 local_path, remote_url, request.default_base_branch
             )
             LOGGER.info("Pushed to GitHub")
+
+            # After successful push, update remote to use SSH for future operations
+            await self._run_git(local_path, ["remote", "set-url", "origin", f"git@github.com:{repo_full_name}.git"])
 
             project = await self._add_to_config(
                 project_id=repo_name,
@@ -196,14 +201,22 @@ class ProjectCreationService:
             return project
 
         except (ProjectCreationError, RepoExistsError, LocalDirNotGitRepoError, GitHubError):
-            self._cleanup_failed_creation(local_path)
+            self._cleanup_failed_creation(local_path, repo_full_name)
             raise
         except Exception as e:
-            self._cleanup_failed_creation(local_path)
+            self._cleanup_failed_creation(local_path, repo_full_name)
             raise ProjectCreationError(
                 f"Something unexpected happened while creating '{repo_name}'. "
                 f"You'll need to check this when you're home. Sorry :( ({e})"
             ) from e
+
+    def _get_authenticated_remote_url(self, repo_full_name: str) -> str:
+        """Get HTTPS remote URL with token authentication."""
+        token = self._config.github_token
+        if token:
+            return f"https://x-access-token:{token}@github.com/{repo_full_name}.git"
+        # Fall back to SSH if no token (shouldn't happen since we check earlier)
+        return f"git@github.com:{repo_full_name}.git"
 
     def _sanitize_repo_name(self, channel_name: str) -> str:
         """
@@ -375,11 +388,24 @@ class ProjectCreationService:
 
         return stdout.decode().strip() if stdout else ""
 
-    def _cleanup_failed_creation(self, path: Path) -> None:
-        """Clean up local directory on failure."""
+    def _cleanup_failed_creation(self, path: Path, repo_full_name: Optional[str] = None) -> None:
+        """Clean up local directory and GitHub repo on failure."""
         if path.exists():
             try:
                 shutil.rmtree(path)
                 LOGGER.info("Cleaned up failed creation: %s", path)
             except Exception as e:
                 LOGGER.warning("Failed to cleanup %s: %s", path, e)
+
+        if repo_full_name:
+            try:
+                self._delete_github_repo(repo_full_name)
+                LOGGER.info("Deleted GitHub repository: %s", repo_full_name)
+            except Exception as e:
+                LOGGER.warning("Failed to delete GitHub repo %s: %s", repo_full_name, e)
+
+    def _delete_github_repo(self, repo_full_name: str) -> None:
+        """Delete a GitHub repository."""
+        owner, repo = repo_full_name.split("/")
+        gh_repo = self._github._client.get_repo(repo_full_name)
+        gh_repo.delete()
