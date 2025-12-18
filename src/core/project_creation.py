@@ -8,6 +8,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -35,6 +36,7 @@ class ProjectCreationRequest:
     project_id: str
     channel_name: str
     default_agent_id: str = "claude"
+    default_model: Optional[str] = None
     default_base_branch: str = "main"
 
 
@@ -137,6 +139,7 @@ class ProjectCreationService:
                 repo_name=repo_name,
                 default_base_branch=request.default_base_branch,
                 default_agent_id=request.default_agent_id,
+                default_model=request.default_model,
             )
         else:
             raise LocalDirNotGitRepoError(
@@ -186,6 +189,7 @@ class ProjectCreationService:
                 repo_name=repo_name,
                 default_base_branch=request.default_base_branch,
                 default_agent_id=request.default_agent_id,
+                default_model=request.default_model,
             )
             LOGGER.info("Updated projects.yaml")
 
@@ -308,6 +312,7 @@ class ProjectCreationService:
         repo_name: str,
         default_base_branch: str,
         default_agent_id: str,
+        default_model: Optional[str] = None,
     ) -> Project:
         """Add project entry to projects.yaml."""
         projects_yaml = self._config.config_dir / "projects.yaml"
@@ -323,7 +328,7 @@ class ProjectCreationService:
         except ValueError:
             relative_path = local_path
 
-        data["projects"][project_id] = {
+        project_data = {
             "path": str(relative_path),
             "default_agent": default_agent_id,
             "github": {
@@ -332,6 +337,10 @@ class ProjectCreationService:
                 "default_base_branch": default_base_branch,
             },
         }
+        if default_model:
+            project_data["default_model"] = default_model
+
+        data["projects"][project_id] = project_data
 
         with open(projects_yaml, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
@@ -341,6 +350,7 @@ class ProjectCreationService:
             channel_name=channel_name,
             path=local_path,
             default_agent_id=default_agent_id,
+            default_model=default_model,
             github=GitHubRepoConfig(
                 owner=github_owner,
                 repo=repo_name,

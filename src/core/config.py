@@ -153,6 +153,8 @@ def _load_projects(path: Path) -> Tuple[Dict[str, Project], Path]:
         if not default_agent:
             raise ConfigError(f"Project {project_id} missing default_agent")
 
+        default_model = cfg.get("default_model")
+
         github_cfg = cfg.get("github")
         github = None
         if github_cfg:
@@ -170,6 +172,7 @@ def _load_projects(path: Path) -> Tuple[Dict[str, Project], Path]:
             channel_name=project_id,
             path=full_path,
             default_agent_id=default_agent,
+            default_model=default_model,
             github=github,
         )
     if not projects:

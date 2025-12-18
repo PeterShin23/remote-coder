@@ -128,6 +128,10 @@ class TestPendingProjectCreation:
         assert pending.channel_name == "my-project"
         assert pending.thread_ts == "111.000"
         assert pending.created_at == 1234567890.0
+        assert pending.state == "awaiting_confirmation"
+        assert pending.selected_agent_id is None
+        assert pending.agent_options == []
+        assert pending.model_options == []
 
 
 class TestRouterMissingProject:
@@ -150,7 +154,7 @@ class TestRouterMissingProject:
         # Should have sent the prompt message
         assert len(adapter.messages) == 1
         assert "new-idea" in adapter.messages[0]["text"]
-        assert "Reply with **Y**" in adapter.messages[0]["text"]
+        assert "Reply with \"Y\"" in adapter.messages[0]["text"]
 
     @pytest.mark.asyncio
     async def test_missing_project_tracks_pending(self, router_setup):
@@ -178,11 +182,11 @@ class TestRouterYesNoHandling:
     """Tests for Y/N response handling in Router."""
 
     @pytest.mark.asyncio
-    async def test_yes_response_creates_project(self, router_setup):
-        """Test that 'Y' response triggers project creation."""
+    async def test_full_creation_flow(self, router_setup):
+        """Test full flow: Y → pick agent → pick model → project created."""
         router, adapter, tmp_path = router_setup
 
-        # First, send a message to trigger the prompt
+        # Step 1: Send message to trigger prompt
         event1 = {
             "channel": "C123",
             "channel_name": "new-idea",
@@ -191,7 +195,28 @@ class TestRouterYesNoHandling:
         }
         await router.handle_message(event1)
 
-        # Now send 'Y' response
+        # Step 2: Send 'Y' - should show agent options
+        event2 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "Y",
+            "ts": "111.333",
+        }
+        await router.handle_message(event2)
+        assert any("Which agent" in msg["text"] for msg in adapter.messages)
+        assert any("1. claude" in msg["text"] for msg in adapter.messages)
+
+        # Step 3: Pick agent - should show model options
+        event3 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "1",
+            "ts": "111.444",
+        }
+        await router.handle_message(event3)
+        assert any("Which model" in msg["text"] for msg in adapter.messages)
+
+        # Step 4: Pick model - should create project
         with patch.object(
             router._project_creation_handler._project_creator, "create_project", new_callable=AsyncMock
         ) as mock_create:
@@ -207,30 +232,25 @@ class TestRouterYesNoHandling:
                 ),
             )
 
-            event2 = {
+            event4 = {
                 "channel": "C123",
                 "channel_name": "new-idea",
-                "text": "Y",
-                "ts": "111.333",
+                "text": "1",
+                "ts": "111.555",
             }
-            await router.handle_message(event2)
+            await router.handle_message(event4)
 
-            # Should have called create_project
             mock_create.assert_called_once()
 
-        # Should have sent "Creating..." and success messages
         assert any("Creating project" in msg["text"] for msg in adapter.messages)
         assert any("I've set up" in msg["text"] for msg in adapter.messages)
-
-        # Pending should be cleaned up
         assert "C123" not in router._project_creation_handler._pending_projects
 
     @pytest.mark.asyncio
-    async def test_yes_lowercase_works(self, router_setup):
-        """Test that lowercase 'y' also works."""
-        router, adapter, tmp_path = router_setup
+    async def test_yes_shows_agent_options(self, router_setup):
+        """Test that 'Y' response shows agent options."""
+        router, adapter, _ = router_setup
 
-        # Trigger the prompt
         event1 = {
             "channel": "C123",
             "channel_name": "new-idea",
@@ -239,32 +259,24 @@ class TestRouterYesNoHandling:
         }
         await router.handle_message(event1)
 
-        with patch.object(
-            router._project_creation_handler._project_creator, "create_project", new_callable=AsyncMock
-        ) as mock_create:
-            mock_create.return_value = Project(
-                id="new-idea",
-                channel_name="new-idea",
-                path=tmp_path / "projects" / "new-idea",
-                default_agent_id="claude",
-            )
+        event2 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "y",
+            "ts": "111.333",
+        }
+        await router.handle_message(event2)
 
-            event2 = {
-                "channel": "C123",
-                "channel_name": "new-idea",
-                "text": "y",
-                "ts": "111.333",
-            }
-            await router.handle_message(event2)
-
-            mock_create.assert_called_once()
+        assert any("Which agent" in msg["text"] for msg in adapter.messages)
+        handler = router._project_creation_handler
+        assert "C123" in handler._pending_projects
+        assert handler._pending_projects["C123"].state == "awaiting_agent"
 
     @pytest.mark.asyncio
     async def test_yes_full_word_works(self, router_setup):
         """Test that 'yes' also works."""
-        router, adapter, tmp_path = router_setup
+        router, adapter, _ = router_setup
 
-        # Trigger the prompt
         event1 = {
             "channel": "C123",
             "channel_name": "new-idea",
@@ -273,25 +285,15 @@ class TestRouterYesNoHandling:
         }
         await router.handle_message(event1)
 
-        with patch.object(
-            router._project_creation_handler._project_creator, "create_project", new_callable=AsyncMock
-        ) as mock_create:
-            mock_create.return_value = Project(
-                id="new-idea",
-                channel_name="new-idea",
-                path=tmp_path / "projects" / "new-idea",
-                default_agent_id="claude",
-            )
+        event2 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "yes",
+            "ts": "111.333",
+        }
+        await router.handle_message(event2)
 
-            event2 = {
-                "channel": "C123",
-                "channel_name": "new-idea",
-                "text": "yes",
-                "ts": "111.333",
-            }
-            await router.handle_message(event2)
-
-            mock_create.assert_called_once()
+        assert any("Which agent" in msg["text"] for msg in adapter.messages)
 
     @pytest.mark.asyncio
     async def test_no_response_rejects(self, router_setup):
@@ -370,7 +372,7 @@ class TestRouterYesNoHandling:
         await router.handle_message(event2)
 
         # Should have sent reminder message
-        assert any("Please reply with **Y**" in msg["text"] for msg in adapter.messages)
+        assert any("Please reply with \"Y\"" in msg["text"] for msg in adapter.messages)
 
         # Pending should still be tracked
         assert "C123" in router._project_creation_handler._pending_projects
@@ -380,7 +382,7 @@ class TestRouterYesNoHandling:
         """Test that failed project creation sends error message."""
         router, adapter, _ = router_setup
 
-        # Trigger the prompt
+        # Step 1: Trigger the prompt
         event1 = {
             "channel": "C123",
             "channel_name": "new-idea",
@@ -389,19 +391,37 @@ class TestRouterYesNoHandling:
         }
         await router.handle_message(event1)
 
-        # Mock creation to fail
+        # Step 2: Say Y - shows agent options
+        event2 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "Y",
+            "ts": "111.333",
+        }
+        await router.handle_message(event2)
+
+        # Step 3: Pick agent - shows model options
+        event3 = {
+            "channel": "C123",
+            "channel_name": "new-idea",
+            "text": "1",
+            "ts": "111.444",
+        }
+        await router.handle_message(event3)
+
+        # Step 4: Pick model - creation fails
         with patch.object(
             router._project_creation_handler._project_creator, "create_project", new_callable=AsyncMock
         ) as mock_create:
             mock_create.side_effect = Exception("GitHub API error")
 
-            event2 = {
+            event4 = {
                 "channel": "C123",
                 "channel_name": "new-idea",
-                "text": "Y",
-                "ts": "111.333",
+                "text": "1",
+                "ts": "111.555",
             }
-            await router.handle_message(event2)
+            await router.handle_message(event4)
 
         # Should have sent error message
         assert any("couldn't create the project" in msg["text"] for msg in adapter.messages)
