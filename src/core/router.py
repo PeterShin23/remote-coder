@@ -149,6 +149,20 @@ class Router:
         if was_handled:
             if new_config:
                 self._apply_new_config(new_config)
+                # Start a session for the newly created project
+                try:
+                    project = self._config.get_project_by_channel(channel_lookup)
+                    session, _ = self._get_or_create_session(project, channel_id, thread_ts)
+                    # Send the "Starting session" message like we do for existing projects
+                    model_display = f" `{session.active_model}`" if session.active_model else ""
+                    await self._send_message(
+                        channel_id,
+                        thread_ts,
+                        f"Starting session for `{project.id}` with `{session.active_agent_id}`{model_display}. "
+                        "Send a message with your request, or use `!help` for common commands.",
+                    )
+                except ProjectNotFound:
+                    pass  # Shouldn't happen after successful creation
             return
 
         try:
@@ -203,8 +217,8 @@ class Router:
             return self._session_manager.get_by_thread(channel_id, thread_ts), False
         except SessionNotFound:
             default_agent = self._config.get_agent(project.default_agent_id)
-            # Get default model for the agent
-            default_model = default_agent.models.get("default") if default_agent.models else None
+            # Prefer project's default_model (set during creation), fall back to agent's default
+            default_model = project.default_model or (default_agent.models.get("default") if default_agent.models else None)
             session = self._session_manager.create_session(
                 project=project,
                 channel_id=channel_id,

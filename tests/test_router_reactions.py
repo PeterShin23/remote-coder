@@ -195,12 +195,13 @@ class TestRouterYesNoHandling:
         }
         await router.handle_message(event1)
 
-        # Step 2: Send 'Y' - should show agent options
+        # Step 2: Send 'Y' - should show agent options (thread_ts points to original)
         event2 = {
             "channel": "C123",
             "channel_name": "new-idea",
             "text": "Y",
             "ts": "111.333",
+            "thread_ts": "111.222",
         }
         await router.handle_message(event2)
         assert any("Which agent" in msg["text"] for msg in adapter.messages)
@@ -212,19 +213,38 @@ class TestRouterYesNoHandling:
             "channel_name": "new-idea",
             "text": "1",
             "ts": "111.444",
+            "thread_ts": "111.222",
         }
         await router.handle_message(event3)
         assert any("Which model" in msg["text"] for msg in adapter.messages)
 
         # Step 4: Pick model - should create project
+        # Write the project to projects.yaml so load_config finds it
+        config_dir = tmp_path / "config"
+        projects_yaml = config_dir / "projects.yaml"
+        project_dir = tmp_path / "projects" / "new-idea"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        projects_yaml.write_text(f"""base_dir: "{tmp_path / 'projects'}"
+projects:
+  new-idea:
+    path: new-idea
+    default_agent: claude
+    default_model: sonnet
+    github:
+      owner: test-user
+      repo: new-idea
+      default_base_branch: main
+""")
+
         with patch.object(
             router._project_creation_handler._project_creator, "create_project", new_callable=AsyncMock
         ) as mock_create:
             mock_create.return_value = Project(
                 id="new-idea",
                 channel_name="new-idea",
-                path=tmp_path / "projects" / "new-idea",
+                path=project_dir,
                 default_agent_id="claude",
+                default_model="sonnet",
                 github=GitHubRepoConfig(
                     owner="test-user",
                     repo="new-idea",
@@ -237,6 +257,7 @@ class TestRouterYesNoHandling:
                 "channel_name": "new-idea",
                 "text": "1",
                 "ts": "111.555",
+                "thread_ts": "111.222",
             }
             await router.handle_message(event4)
 
@@ -245,6 +266,19 @@ class TestRouterYesNoHandling:
         assert any("Setting up project" in msg["text"] for msg in adapter.messages)
         assert any("I've set up" in msg["text"] for msg in adapter.messages)
         assert "C123" not in router._project_creation_handler._pending_projects
+
+        # Session should be automatically created after project setup
+        session = router._session_manager.get_by_thread("C123", "111.222")
+        assert session is not None
+        assert session.active_agent_id == "claude"
+        assert session.active_model == "sonnet"
+
+        # "Starting session" message should be sent after project setup
+        assert any("Starting session for" in msg["text"] for msg in adapter.messages)
+        starting_msg = next(m for m in adapter.messages if "Starting session for" in m["text"])
+        assert "new-idea" in starting_msg["text"]
+        assert "claude" in starting_msg["text"]
+        assert "sonnet" in starting_msg["text"]
 
     @pytest.mark.asyncio
     async def test_yes_shows_agent_options(self, router_setup):
