@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.config import Config
-from src.core.errors import GitHubError, ProjectCreationError, ProjectNotFound
+from src.core.errors import (
+    GitHubError,
+    LocalDirNotGitRepoError,
+    ProjectCreationError,
+    ProjectNotFound,
+    RepoExistsError,
+)
 from src.core.models import Agent, AgentType, GitHubRepoConfig, Project, WorkingDirMode
 from src.core.project_creation import ProjectCreationRequest, ProjectCreationService
 
@@ -65,65 +71,146 @@ def mock_github_manager():
     return manager
 
 
-class TestProjectCreationService:
-    """Tests for ProjectCreationService."""
+class TestSanitizeRepoName:
+    """Tests for _sanitize_repo_name method."""
 
-    def test_validate_project_id_empty(self, test_config, mock_github_manager):
-        """Test that empty project ID raises error."""
+    def test_sanitize_keeps_letters_numbers_dashes(self, test_config, mock_github_manager):
+        """Test that letters, numbers, and dashes are preserved."""
         service = ProjectCreationService(test_config, mock_github_manager)
-        with pytest.raises(ProjectCreationError, match="cannot be empty"):
-            service._validate_project_id("")
+        assert service._sanitize_repo_name("my-project-123") == "my-project-123"
 
-    def test_validate_project_id_too_long(self, test_config, mock_github_manager):
-        """Test that overly long project ID raises error."""
+    def test_sanitize_removes_underscores(self, test_config, mock_github_manager):
+        """Test that underscores are removed."""
         service = ProjectCreationService(test_config, mock_github_manager)
-        with pytest.raises(ProjectCreationError, match="too long"):
-            service._validate_project_id("a" * 101)
+        assert service._sanitize_repo_name("my_project") == "myproject"
 
-    def test_validate_project_id_path_traversal(self, test_config, mock_github_manager):
-        """Test that path traversal attempts are blocked."""
+    def test_sanitize_removes_special_chars(self, test_config, mock_github_manager):
+        """Test that special characters are removed."""
         service = ProjectCreationService(test_config, mock_github_manager)
-        with pytest.raises(ProjectCreationError, match="path separators"):
-            service._validate_project_id("../evil")
-        with pytest.raises(ProjectCreationError, match="path separators"):
-            service._validate_project_id("foo/bar")
-        with pytest.raises(ProjectCreationError, match="path separators"):
-            service._validate_project_id("foo\\bar")
+        assert service._sanitize_repo_name("my.project!@#$%") == "myproject"
 
-    def test_validate_project_id_invalid_chars(self, test_config, mock_github_manager):
-        """Test that invalid characters are rejected."""
+    def test_sanitize_strips_leading_trailing_dashes(self, test_config, mock_github_manager):
+        """Test that leading/trailing dashes are stripped."""
         service = ProjectCreationService(test_config, mock_github_manager)
-        with pytest.raises(ProjectCreationError, match="must start with alphanumeric"):
-            service._validate_project_id("-starts-with-dash")
-        with pytest.raises(ProjectCreationError, match="must start with alphanumeric"):
-            service._validate_project_id("_starts-with-underscore")
+        assert service._sanitize_repo_name("-my-project-") == "my-project"
+        assert service._sanitize_repo_name("---test---") == "test"
 
-    def test_validate_project_id_valid(self, test_config, mock_github_manager):
-        """Test that valid project IDs pass validation."""
+    def test_sanitize_empty_result_raises(self, test_config, mock_github_manager):
+        """Test that empty result after sanitization raises error."""
         service = ProjectCreationService(test_config, mock_github_manager)
-        # These should not raise
-        service._validate_project_id("my-project")
-        service._validate_project_id("my_project")
-        service._validate_project_id("MyProject123")
-        service._validate_project_id("a")
+        with pytest.raises(ProjectCreationError, match="empty repo name"):
+            service._sanitize_repo_name("___")
+        with pytest.raises(ProjectCreationError, match="empty repo name"):
+            service._sanitize_repo_name("---")
+        with pytest.raises(ProjectCreationError, match="empty repo name"):
+            service._sanitize_repo_name("!@#$%")
+
+
+class TestExistingDirectoryHandling:
+    """Tests for handling existing directories."""
 
     @pytest.mark.asyncio
-    async def test_create_project_directory_exists(
+    async def test_existing_git_repo_adds_to_config(
         self, test_config, mock_github_manager
     ):
-        """Test that creating a project fails if directory exists."""
+        """Test that existing git repo is just added to config."""
         service = ProjectCreationService(test_config, mock_github_manager)
 
-        # Create the directory first
-        (test_config.base_dir / "existing-project").mkdir()
+        # Create existing git repo
+        repo_path = test_config.base_dir / "existing-repo"
+        repo_path.mkdir()
+        (repo_path / ".git").mkdir()
+
+        # Mock _run_git to simulate remote URL fetch
+        async def mock_git(cwd, args):
+            if "get-url" in args:
+                return "git@github.com:existing-owner/existing-repo.git"
+            return ""
+
+        with patch.object(service, "_run_git", side_effect=mock_git):
+            request = ProjectCreationRequest(
+                project_id="existing-repo",
+                channel_name="existing-repo",
+            )
+
+            project = await service.create_project(request)
+
+            assert project.id == "existing-repo"
+            assert project.github.owner == "existing-owner"
+
+    @pytest.mark.asyncio
+    async def test_existing_dir_not_git_repo_raises(
+        self, test_config, mock_github_manager
+    ):
+        """Test that existing non-git directory raises LocalDirNotGitRepoError."""
+        service = ProjectCreationService(test_config, mock_github_manager)
+
+        # Create existing directory without .git
+        (test_config.base_dir / "not-a-repo").mkdir()
 
         request = ProjectCreationRequest(
-            project_id="existing-project",
-            channel_name="existing-project",
+            project_id="not-a-repo",
+            channel_name="not-a-repo",
         )
 
-        with pytest.raises(ProjectCreationError, match="Directory already exists"):
+        with pytest.raises(LocalDirNotGitRepoError, match="isn't a git repository"):
             await service.create_project(request)
+
+
+class TestGitHubRepoCreation:
+    """Tests for GitHub repository creation."""
+
+    @pytest.mark.asyncio
+    async def test_github_repo_exists_raises_repo_exists_error(
+        self, test_config, mock_github_manager
+    ):
+        """Test that 'repo exists' error raises RepoExistsError."""
+        service = ProjectCreationService(test_config, mock_github_manager)
+
+        # Make create_repo raise "already exists" error
+        mock_github_manager._client.get_user().create_repo.side_effect = Exception(
+            "Repository 'test' already exists on this account"
+        )
+
+        # Mock git commands to succeed
+        with patch.object(service, "_run_git", new_callable=AsyncMock) as mock_git:
+            mock_git.return_value = ""
+
+            request = ProjectCreationRequest(
+                project_id="test-project",
+                channel_name="test-project",
+            )
+
+            with pytest.raises(RepoExistsError, match="already exists"):
+                await service.create_project(request)
+
+    @pytest.mark.asyncio
+    async def test_github_other_error_raises_project_creation_error(
+        self, test_config, mock_github_manager
+    ):
+        """Test that other GitHub errors raise ProjectCreationError."""
+        service = ProjectCreationService(test_config, mock_github_manager)
+
+        # Make create_repo raise a different error
+        mock_github_manager._client.get_user().create_repo.side_effect = Exception(
+            "Rate limit exceeded"
+        )
+
+        # Mock git commands to succeed
+        with patch.object(service, "_run_git", new_callable=AsyncMock) as mock_git:
+            mock_git.return_value = ""
+
+            request = ProjectCreationRequest(
+                project_id="test-project",
+                channel_name="test-project",
+            )
+
+            with pytest.raises(ProjectCreationError, match="Something unexpected"):
+                await service.create_project(request)
+
+
+class TestProjectCreationService:
+    """Tests for ProjectCreationService."""
 
     @pytest.mark.asyncio
     async def test_create_project_already_configured(
@@ -159,7 +246,7 @@ class TestProjectCreationService:
             channel_name="new-project",
         )
 
-        with pytest.raises(ProjectCreationError, match="not configured"):
+        with pytest.raises(GitHubError, match="not configured"):
             await service.create_project(request)
 
     @pytest.mark.asyncio
@@ -202,6 +289,35 @@ class TestProjectCreationService:
             assert "new-project" in data["projects"]
             assert data["projects"]["new-project"]["default_agent"] == "claude"
             assert data["projects"]["new-project"]["github"]["owner"] == "test-user"
+
+    @pytest.mark.asyncio
+    async def test_create_project_sanitizes_channel_name(
+        self, test_config, mock_github_manager
+    ):
+        """Test that channel name with special chars is sanitized."""
+        service = ProjectCreationService(test_config, mock_github_manager)
+
+        # Update mock to return correct repo name
+        mock_github_manager._client.get_user().create_repo.return_value.full_name = (
+            "test-user/my-project"
+        )
+
+        # Mock git commands to succeed
+        with patch.object(service, "_run_git", new_callable=AsyncMock) as mock_git:
+            mock_git.return_value = ""
+
+            request = ProjectCreationRequest(
+                project_id="my_project!@#",  # Has special chars
+                channel_name="my_project!@#",
+                default_agent_id="claude",
+                default_base_branch="main",
+            )
+
+            project = await service.create_project(request)
+
+            # Should be sanitized to "myproject"
+            assert project.id == "myproject"
+            assert (test_config.base_dir / "myproject").exists()
 
     @pytest.mark.asyncio
     async def test_create_project_cleanup_on_failure(

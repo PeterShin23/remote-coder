@@ -12,14 +12,20 @@ from pathlib import Path
 import yaml
 
 from .config import Config
-from .errors import GitHubError, ProjectCreationError, ProjectNotFound
+from .errors import (
+    GitHubError,
+    LocalDirNotGitRepoError,
+    ProjectCreationError,
+    ProjectNotFound,
+    RepoExistsError,
+)
 from .models import GitHubRepoConfig, Project
 from ..github import GitHubManager
 
 LOGGER = logging.getLogger(__name__)
 
-# Valid project ID pattern: alphanumeric, hyphens, underscores
-PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+# Pattern to strip invalid characters from repo names (keep only letters, numbers, dashes)
+REPO_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9-]")
 
 
 @dataclass
@@ -51,78 +57,133 @@ class ProjectCreationService:
         """
         Create a new project with local directory and GitHub repo.
 
-        Steps:
-        1. Validate project ID and ensure project doesn't exist
-        2. Create local directory
-        3. Initialize git repository
-        4. Create GitHub repository (private)
-        5. Add initial commit (README.md)
-        6. Push to GitHub
-        7. Update projects.yaml
+        Flow:
+        1. Sanitize channel name to get repo name
+        2. Check if local directory exists:
+           a. EXISTS + is git repo → just add to config
+           b. EXISTS + not git repo → raise LocalDirNotGitRepoError
+           c. DOESN'T EXIST → create dir, init git, create GitHub repo, push
+        3. Update projects.yaml
 
         Returns:
             Created Project object
 
         Raises:
             ProjectCreationError: If any step fails
+            RepoExistsError: If GitHub repo name already exists
+            LocalDirNotGitRepoError: If local dir exists but isn't a git repo
         """
-        project_id = request.project_id
+        repo_name = self._sanitize_repo_name(request.channel_name)
+        LOGGER.info("Sanitized channel '%s' to repo name '%s'", request.channel_name, repo_name)
 
-        # Validate project ID
-        self._validate_project_id(project_id)
-
-        local_path = self._config.base_dir / project_id
-
-        # Validate project doesn't exist
-        if local_path.exists():
-            raise ProjectCreationError(f"Directory already exists: {local_path}")
+        local_path = self._config.base_dir / repo_name
 
         try:
-            self._config.get_project_by_channel(project_id)
-            raise ProjectCreationError(f"Project '{project_id}' is already configured")
+            self._config.get_project_by_channel(request.channel_name)
+            raise ProjectCreationError(f"Project '{request.channel_name}' is already configured")
         except ProjectNotFound:
-            pass  # Good, doesn't exist
+            pass
 
+        if local_path.exists():
+            return await self._handle_existing_directory(
+                local_path=local_path,
+                repo_name=repo_name,
+                request=request,
+            )
+        else:
+            return await self._create_new_project(
+                local_path=local_path,
+                repo_name=repo_name,
+                request=request,
+            )
+
+    async def _handle_existing_directory(
+        self,
+        local_path: Path,
+        repo_name: str,
+        request: ProjectCreationRequest,
+    ) -> Project:
+        """Handle the case where local directory already exists."""
+        git_dir = local_path / ".git"
+
+        if git_dir.exists() and git_dir.is_dir():
+            LOGGER.info("Found existing git repo at %s, adding to config", local_path)
+
+            # Try to parse owner from remote URL
+            github_owner = None
+            try:
+                remote_url = await self._run_git(local_path, ["remote", "get-url", "origin"])
+                if "github.com" in remote_url:
+                    if remote_url.startswith("git@"):
+                        parts = remote_url.split(":")[-1].replace(".git", "").split("/")
+                    else:
+                        parts = remote_url.replace(".git", "").split("/")[-2:]
+                    if len(parts) >= 2:
+                        github_owner = parts[0]
+            except ProjectCreationError:
+                pass
+
+            if not github_owner:
+                try:
+                    github_owner = await self._get_github_owner()
+                except GitHubError:
+                    github_owner = "unknown"
+
+            return await self._add_to_config(
+                project_id=repo_name,
+                channel_name=request.channel_name,
+                local_path=local_path,
+                github_owner=github_owner,
+                repo_name=repo_name,
+                default_base_branch=request.default_base_branch,
+                default_agent_id=request.default_agent_id,
+            )
+        else:
+            raise LocalDirNotGitRepoError(
+                f"Directory '{local_path}' exists but isn't a git repository. "
+                "This isn't supported yet, sorry :("
+            )
+
+    async def _create_new_project(
+        self,
+        local_path: Path,
+        repo_name: str,
+        request: ProjectCreationRequest,
+    ) -> Project:
+        """Create a completely new project with GitHub repo."""
         try:
-            # Get GitHub owner
             github_owner = await self._get_github_owner()
 
-            # Create local directory
             local_path.mkdir(parents=True, exist_ok=False)
             LOGGER.info("Created local directory: %s", local_path)
 
-            # Initialize git
             await self._init_git_repo(local_path, request.default_base_branch)
             LOGGER.info("Initialized git repository")
 
-            # Create GitHub repo
             repo_full_name = await self._create_github_repo(
                 owner=github_owner,
-                repo_name=project_id,
+                repo_name=repo_name,
                 description=f"Created from Slack channel #{request.channel_name}",
             )
             LOGGER.info("Created GitHub repository: %s", repo_full_name)
 
-            # Add initial commit
             await self._create_initial_commit(
-                local_path, project_id, request.channel_name
+                local_path, repo_name, request.channel_name
             )
             LOGGER.info("Created initial commit")
 
-            # Push to GitHub
             remote_url = f"git@github.com:{repo_full_name}.git"
             await self._push_to_github(
                 local_path, remote_url, request.default_base_branch
             )
             LOGGER.info("Pushed to GitHub")
 
-            # Update projects.yaml
             project = await self._add_to_config(
-                project_id=project_id,
+                project_id=repo_name,
                 channel_name=request.channel_name,
                 local_path=local_path,
                 github_owner=github_owner,
-                repo_name=project_id,
+                repo_name=repo_name,
                 default_base_branch=request.default_base_branch,
                 default_agent_id=request.default_agent_id,
             )
@@ -130,36 +191,32 @@ class ProjectCreationService:
 
             return project
 
-        except ProjectCreationError:
-            # Cleanup and re-raise
+        except (ProjectCreationError, RepoExistsError, LocalDirNotGitRepoError, GitHubError):
             self._cleanup_failed_creation(local_path)
             raise
         except Exception as e:
-            # Cleanup on unexpected failure
             self._cleanup_failed_creation(local_path)
             raise ProjectCreationError(
-                f"Failed to create project '{project_id}': {e}"
+                f"Something unexpected happened while creating '{repo_name}'. "
+                f"You'll need to check this when you're home. Sorry :( ({e})"
             ) from e
 
-    def _validate_project_id(self, project_id: str) -> None:
-        """Validate project ID for safety and compatibility."""
-        if not project_id:
-            raise ProjectCreationError("Project ID cannot be empty")
+    def _sanitize_repo_name(self, channel_name: str) -> str:
+        """
+        Sanitize channel name to a valid GitHub repo name.
 
-        if len(project_id) > 100:
-            raise ProjectCreationError("Project ID too long (max 100 characters)")
+        Keeps only letters, numbers, and dashes.
+        Strips leading/trailing dashes.
+        """
+        sanitized = REPO_NAME_INVALID_CHARS.sub("", channel_name).strip("-")
 
-        # Prevent directory traversal
-        if ".." in project_id or "/" in project_id or "\\" in project_id:
+        if not sanitized:
             raise ProjectCreationError(
-                "Project ID cannot contain path separators or '..'"
+                f"Channel name '{channel_name}' results in an empty repo name after sanitization. "
+                "Please rename the channel to include letters or numbers."
             )
 
-        if not PROJECT_ID_PATTERN.match(project_id):
-            raise ProjectCreationError(
-                "Project ID must start with alphanumeric and contain only "
-                "alphanumeric characters, hyphens, or underscores"
-            )
+        return sanitized
 
     async def _get_github_owner(self) -> str:
         """Get the GitHub owner/username for creating repos."""
@@ -188,6 +245,10 @@ class ProjectCreationService:
 
         Returns:
             Full repository name (owner/repo)
+
+        Raises:
+            RepoExistsError: If the repo name already exists
+            ProjectCreationError: For other GitHub API errors
         """
 
         def _create_repo() -> str:
@@ -203,7 +264,16 @@ class ProjectCreationService:
         try:
             return await asyncio.to_thread(_create_repo)
         except Exception as e:
-            raise GitHubError(f"Failed to create GitHub repository: {e}") from e
+            error_str = str(e).lower()
+            if "already exists" in error_str:
+                raise RepoExistsError(
+                    f"A GitHub repository named '{repo_name}' already exists. "
+                    "Please rename the Slack channel and try again."
+                ) from e
+            raise ProjectCreationError(
+                f"Something unexpected happened while creating the GitHub repository. "
+                f"You'll need to check this when you're home. Sorry :( ({e})"
+            ) from e
 
     async def _create_initial_commit(
         self,
@@ -242,18 +312,15 @@ class ProjectCreationService:
         """Add project entry to projects.yaml."""
         projects_yaml = self._config.config_dir / "projects.yaml"
 
-        # Load existing
         with open(projects_yaml, "r") as f:
             data = yaml.safe_load(f) or {}
 
         if "projects" not in data:
             data["projects"] = {}
 
-        # Add new project - use relative path from base_dir
         try:
             relative_path = local_path.relative_to(self._config.base_dir)
         except ValueError:
-            # If local_path is not relative to base_dir, use the full path
             relative_path = local_path
 
         data["projects"][project_id] = {
@@ -266,11 +333,9 @@ class ProjectCreationService:
             },
         }
 
-        # Write back
         with open(projects_yaml, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
-        # Create Project object
         return Project(
             id=project_id,
             channel_name=channel_name,
