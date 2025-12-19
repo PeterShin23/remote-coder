@@ -263,7 +263,15 @@ class Router:
                 )
             return
 
-        await self._agent_runner.run(session, project, channel_id, thread_ts, user_text)
+        try:
+            await self._agent_runner.run(session, project, channel_id, thread_ts, user_text)
+        except Exception as exc:
+            LOGGER.exception("Unexpected error during agent interaction for session %s", session.id)
+            await self._send_message(
+                channel_id,
+                thread_ts,
+                f"Something went wrong: {exc}",
+            )
 
     async def _handle_command(
         self,
