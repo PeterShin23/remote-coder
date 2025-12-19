@@ -12,7 +12,7 @@ agents:
       - claude
       - --print
       - --permission-mode
-      - acceptEdits
+      - bypassPermissions
       - --output-format
       - stream-json
       - --verbose
