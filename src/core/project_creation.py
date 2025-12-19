@@ -183,9 +183,6 @@ class ProjectCreationService:
             )
             LOGGER.info("Pushed to GitHub")
 
-            # After successful push, update remote to use SSH for future operations
-            await self._run_git(local_path, ["remote", "set-url", "origin", f"git@github.com:{repo_full_name}.git"])
-
             project = await self._add_to_config(
                 project_id=repo_name,
                 channel_name=request.channel_name,
