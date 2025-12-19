@@ -48,6 +48,11 @@ class GitHubManager:
     def is_configured(self) -> bool:
         return self._client is not None
 
+    @property
+    def token(self) -> Optional[str]:
+        """Get the GitHub token for git operations."""
+        return self._token
+
     async def ensure_pull_request(
         self,
         project: Project,

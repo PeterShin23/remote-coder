@@ -37,9 +37,13 @@ class DummyChatAdapter:
 
     def __init__(self) -> None:
         self.messages: list[Dict[str, str]] = []
+        self._msg_counter = 0
 
-    async def send_message(self, channel: str, thread_ts: str, text: str) -> None:
+    async def send_message(self, channel: str, thread_ts: str, text: str) -> str:
+        self._msg_counter += 1
+        msg_ts = f"{thread_ts}.{self._msg_counter}"
         self.messages.append({"channel": channel, "thread_ts": thread_ts, "text": text})
+        return msg_ts
 
 
 @pytest.fixture
@@ -68,6 +72,8 @@ def router_setup(tmp_path):
         slack_bot_token="x",
         slack_app_token="y",
         slack_allowed_user_ids=["U123"],
+        base_dir=tmp_path / "projects",
+        config_dir=tmp_path / "config",
         github_token=None,
     )
     github_manager = StubGitHubManager()

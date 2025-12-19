@@ -29,6 +29,8 @@ class Config:
     slack_bot_token: str
     slack_app_token: str
     slack_allowed_user_ids: list[str]
+    base_dir: Path
+    config_dir: Path
     github_token: str | None = None
 
     def get_project_by_channel(self, channel: str) -> Project:
@@ -74,7 +76,7 @@ def load_config(config_dir: Path | str | None = None) -> Config:
 def _load_config_from_root(root: Path) -> Config:
     _load_env_file(root / ENV_FILE_NAME)
 
-    projects = _load_projects(root / PROJECTS_FILE)
+    projects, base_dir = _load_projects(root / PROJECTS_FILE)
     agents = _select_agents(_load_agents(root / AGENTS_FILE))
 
     slack_bot_token = _require_env("SLACK_BOT_TOKEN")
@@ -88,6 +90,8 @@ def _load_config_from_root(root: Path) -> Config:
         slack_bot_token=slack_bot_token,
         slack_app_token=slack_app_token,
         slack_allowed_user_ids=slack_allowed_user_ids,
+        base_dir=base_dir,
+        config_dir=root,
         github_token=github_token,
     )
 
@@ -113,7 +117,7 @@ def _load_allowed_user_ids() -> list[str]:
     return [uid.strip() for uid in raw_value.split(",") if uid.strip()]
 
 
-def _load_projects(path: Path) -> Dict[str, Project]:
+def _load_projects(path: Path) -> Tuple[Dict[str, Project], Path]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -149,6 +153,8 @@ def _load_projects(path: Path) -> Dict[str, Project]:
         if not default_agent:
             raise ConfigError(f"Project {project_id} missing default_agent")
 
+        default_model = cfg.get("default_model")
+
         github_cfg = cfg.get("github")
         github = None
         if github_cfg:
@@ -166,11 +172,12 @@ def _load_projects(path: Path) -> Dict[str, Project]:
             channel_name=project_id,
             path=full_path,
             default_agent_id=default_agent,
+            default_model=default_model,
             github=github,
         )
     if not projects:
         LOGGER.warning("No projects configured in %s", path)
-    return projects
+    return projects, base_dir
 
 
 def _load_agents(path: Path) -> Dict[str, Agent]:

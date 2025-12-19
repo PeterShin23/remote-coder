@@ -35,3 +35,18 @@ class SlackError(RemoteCoderError):
 
 class GitHubError(RemoteCoderError):
     pass
+
+
+class ProjectCreationError(RemoteCoderError):
+    """Raised when project creation fails."""
+    pass
+
+
+class RepoExistsError(ProjectCreationError):
+    """Raised when GitHub repo name already exists."""
+    pass
+
+
+class LocalDirNotGitRepoError(ProjectCreationError):
+    """Raised when local directory exists but is not a git repository."""
+    pass

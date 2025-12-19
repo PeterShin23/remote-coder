@@ -49,7 +49,7 @@ def test_project(tmp_path):
 
 
 @pytest.fixture
-def test_config():
+def test_config(tmp_path):
     """Create a real Config with agents suitable for tests."""
     agents = {
         "claude": Agent(
@@ -74,6 +74,8 @@ def test_config():
         slack_bot_token="bot-token",
         slack_app_token="app-token",
         slack_allowed_user_ids=["U123"],
+        base_dir=tmp_path / "projects",
+        config_dir=tmp_path / "config",
         github_token=None,
     )
     return config

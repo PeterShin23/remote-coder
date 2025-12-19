@@ -20,6 +20,15 @@ from .conversation import SessionManager
 LOGGER = logging.getLogger(__name__)
 
 
+def _get_authenticated_url(project: Project, token: Optional[str]) -> Optional[str]:
+    """Get HTTPS URL with token authentication for a project."""
+    if not project.github or not token:
+        return None
+    owner = project.github.owner
+    repo = project.github.repo
+    return f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+
+
 class GitWorkflowService:
     """Encapsulates git operations and PR publishing logic."""
 
@@ -81,7 +90,7 @@ class GitWorkflowService:
             return
 
         base = project.github.default_base_branch
-        await self._prepare_base_branch(repo_path, base, require_clean=True)
+        await self._prepare_base_branch(repo_path, base, require_clean=True, project=project)
         await self._run_git(repo_path, ["checkout", "-B", branch, base])
 
     async def stash_changes(self, repo_path: Path) -> bool:
@@ -106,7 +115,9 @@ class GitWorkflowService:
         await self._run_git(session.project_path, ["add", "-A"])
         if not await self._commit_changes(session.project_path, pr_title):
             return None
-        await self._run_git(session.project_path, ["push", "-u", "origin", branch])
+
+        remote = _get_authenticated_url(project, self._github_manager.token) or "origin"
+        await self._run_git(session.project_path, ["push", "-u", remote, branch])
 
         existing_pr_number = self._get_existing_pr_number(session.id)
 
@@ -137,18 +148,24 @@ class GitWorkflowService:
         self._session_manager.set_pr_ref(pr_ref)
         return f"Pushed updates to branch `{branch}`\nLinked PR: {pr_ref.url}"
 
-    async def _prepare_base_branch(self, repo_path: Path, base: str, require_clean: bool = False) -> None:
+    async def _prepare_base_branch(
+        self, repo_path: Path, base: str, require_clean: bool = False, project: Optional[Project] = None
+    ) -> None:
         if require_clean and await self._repo_has_changes(repo_path):
             raise GitHubError(
                 "Working tree has local changes. Run `!stash` to stash them and start a new session."
             )
-        await self._run_git(repo_path, ["fetch", "origin", base])
+        # Use authenticated HTTPS URL for fetch/pull to avoid SSH key issues
+        remote = "origin"
+        if project:
+            remote = _get_authenticated_url(project, self._github_manager.token) or "origin"
+        await self._run_git(repo_path, ["fetch", remote, base])
         show_ref = await self._run_git(repo_path, ["show-ref", "--verify", f"refs/heads/{base}"], check=False)
         if show_ref.returncode != 0:
             await self._run_git(repo_path, ["checkout", "-B", base, f"origin/{base}"])
         else:
             await self._run_git(repo_path, ["checkout", base])
-            await self._run_git(repo_path, ["pull", "--ff-only", "origin", base])
+            await self._run_git(repo_path, ["pull", "--ff-only", remote, base])
 
     async def _commit_changes(self, repo_path: Path, message: str) -> bool:
         try:
@@ -172,7 +189,7 @@ class GitWorkflowService:
             await self._run_git(repo_path, ["checkout", "-b", branch])
             return
 
-        await self._prepare_base_branch(repo_path, base)
+        await self._prepare_base_branch(repo_path, base, project=project)
         await self._run_git(repo_path, ["checkout", "-B", branch, base])
 
     def _get_existing_pr_number(self, session_id: UUID) -> Optional[int]:

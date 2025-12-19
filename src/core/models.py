@@ -35,6 +35,7 @@ class Project:
     path: Path
     default_agent_id: str
     github: Optional[GitHubRepoConfig] = None
+    default_model: Optional[str] = None
 
 
 class SessionStatus(str, Enum):

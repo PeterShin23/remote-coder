@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from slack_sdk.errors import SlackApiError
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
@@ -35,9 +35,14 @@ class SlackAdapter(IChatAdapter):
         self._channel_name_cache: Dict[str, str] = {}
         self._client.socket_mode_request_listeners.append(self._handle_socket_request)
 
-    async def send_message(self, channel: str, thread_ts: str, text: str) -> None:
+    async def send_message(
+        self, channel: str, thread_ts: str, text: str
+    ) -> Optional[str]:
         try:
-            await self._web_client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+            response = await self._web_client.chat_postMessage(
+                channel=channel, text=text, thread_ts=thread_ts
+            )
+            return response.get("ts")
         except SlackApiError as exc:
             raise SlackError(f"Failed to send Slack message: {exc}") from exc
 
